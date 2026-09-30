@@ -4,7 +4,8 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
+import pro.ezboss.mobile.ui.theme.*
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.FilterList
@@ -78,25 +79,34 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
     }
     LaunchedEffect(Unit) { load(true) }
 
-    Column(Modifier.fillMaxSize().background(Color(0xFFF7F8F6))) {
-        Row(Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            BasicTextField(value = search, onValueChange = { search = it; criteriaChanged() }, modifier = Modifier.weight(1f).heightIn(min = 46.dp).background(Color(0xFFF1F4F2), RoundedCornerShape(0.dp)).padding(horizontal = 12.dp, vertical = 14.dp), singleLine = true, textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFF17231F), fontSize = 15.sp), decorationBox = { inner -> if (search.isEmpty()) Text("Search customer name", color = Color(0xFF77817C), fontSize = 14.sp); inner() })
-            Spacer(Modifier.width(8.dp))
-            OutlinedButton(onClick = { filtersOpen = true }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp), shape = RoundedCornerShape(0.dp)) { Icon(Icons.Default.FilterList, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Filters") }
+    Column(Modifier.fillMaxSize().background(EzBossDesign.Canvas)) {
+        PageHeading("Estimates", "Manage your estimates and invoices.")
+        Row(Modifier.fillMaxWidth().padding(EzBossDesign.PagePadding), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = search, onValueChange = { search = it; criteriaChanged() },
+                modifier = Modifier.weight(1f), singleLine = true,
+                placeholder = { Text("Search customer", style = MaterialTheme.typography.bodyMedium) },
+                leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(20.dp)) },
+                shape = EzBossDesign.ControlShape,
+                colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = Color.White, focusedContainerColor = Color.White),
+            )
+            OutlinedIconButton(onClick = { filtersOpen = true }, modifier = Modifier.size(52.dp), shape = EzBossDesign.ControlShape) {
+                Icon(Icons.Default.FilterList, "Filter estimates")
+            }
         }
-        if (estimateFilter != "All" || clientFilter != "Any") Text("${estimateFilter.takeIf { it != "All" } ?: "Any type"} · ${clientFilter.takeIf { it != "Any" } ?: "Any client status"}", Modifier.fillMaxWidth().background(Color.White).padding(start = 16.dp, bottom = 8.dp), color = Color(0xFF66716B), fontSize = 12.sp)
-        HorizontalDivider(color = Color(0xFFE3E9E5))
+        if (estimateFilter != "All" || clientFilter != "Any") Text("${estimateFilter.takeIf { it != "All" } ?: "Any type"} · ${clientFilter.takeIf { it != "Any" } ?: "Any client status"}", Modifier.fillMaxWidth().background(Color.White).padding(start = 16.dp, bottom = 8.dp), color = EzBossDesign.Muted, fontSize = 12.sp)
+        HorizontalDivider(color = EzBossDesign.Border)
         when {
             loading && rows.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             error != null && rows.isEmpty() -> StateMessage(if (denied) "Access denied" else "Couldn’t load estimates", error!!, if (denied) null else "Retry") { generation++; load(true) }
             rows.isEmpty() -> StateMessage(if (search.isNotBlank() || estimateFilter != "All" || clientFilter != "Any") "No matching estimates" else "No estimates yet", if (search.isNotBlank() || estimateFilter != "All" || clientFilter != "Any") "Try changing your search or filters." else "Estimates will appear here when they are available.", null) {}
-            else -> LazyVerticalGrid(columns = GridCells.Fixed(2), contentPadding = PaddingValues(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxSize()) {
+            else -> LazyVerticalGrid(columns = GridCells.Adaptive(160.dp), contentPadding = PaddingValues(EzBossDesign.PagePadding), horizontalArrangement = Arrangement.spacedBy(EzBossDesign.Gap), verticalArrangement = Arrangement.spacedBy(EzBossDesign.Gap), modifier = Modifier.fillMaxSize()) {
                 items(rows, key = { it.id }) { item -> EstimateCard(item) { onOpen(item.id) } }
-                if (canLoadMore) item(span = { GridItemSpan(2) }) {
+                if (canLoadMore) item(span = { GridItemSpan(maxLineSpan) }) {
                     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         if (loadingMore) CircularProgressIndicator(Modifier.size(24.dp))
                         else if (error != null) TextButton(onClick = { load(false) }) { Text("Couldn’t load more · Retry") }
-                        else OutlinedButton(onClick = { load(false) }, shape = RoundedCornerShape(0.dp)) { Text("Load 25 more") }
+                        else OutlinedButton(onClick = { load(false) }, shape = EzBossDesign.ControlShape) { Text("Load 25 more") }
                     }
                 }
             }
@@ -115,20 +125,21 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
 @Composable private fun FilterChoice(text: String, selected: Boolean, onClick: () -> Unit) { Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) { RadioButton(selected, onClick); Text(text) } }
 
 @Composable private fun EstimateCard(item: EstimateListItem, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().aspectRatio(1f).background(Color.White).border(1.dp, Color(0xFFE1E7E3)).clickable(onClick = onClick).padding(12.dp), verticalArrangement = Arrangement.SpaceBetween) {
-        Column {
-            Text(label(item.estimateState), color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(5.dp)); Text(item.number, color = Color(0xFF17231F), fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(5.dp)); Text(item.customer.ifBlank { "Customer" }, color = Color(0xFF66716B), fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-        }
-        Column {
-            Text(item.clientState?.let(::label) ?: "No client status", color = Color(0xFF66716B), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(4.dp)); Text(money(item.total), color = Color(0xFF17231F), fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), shape = EzBossDesign.CardShape,
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        border = BorderStroke(1.dp, EzBossDesign.Border), elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
+        Column(Modifier.padding(EzBossDesign.PagePadding), verticalArrangement = Arrangement.spacedBy(EzBossDesign.Gap)) {
+            StatusBadge(label(item.estimateState), item.estimateState)
+            Text(item.number, color = EzBossDesign.Link, style = MaterialTheme.typography.titleMedium)
+            Text(item.customer.ifBlank { "Customer" }, color = EzBossDesign.Muted, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            HorizontalDivider()
+            StatusBadge(item.clientState?.let(::label) ?: "No client status", item.clientState)
+            Text(money(item.total), color = EzBossDesign.Ink, style = MaterialTheme.typography.titleLarge)
         }
     }
 }
 
-@Composable private fun StateMessage(title: String, message: String, action: String?, onAction: () -> Unit) { Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 18.sp); Spacer(Modifier.height(8.dp)); Text(message, color = Color(0xFF66716B)); if (action != null) { Spacer(Modifier.height(12.dp)); Button(onClick = onAction) { Text(action) } } } }
+@Composable private fun StateMessage(title: String, message: String, action: String?, onAction: () -> Unit) { Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 18.sp); Spacer(Modifier.height(8.dp)); Text(message, color = EzBossDesign.Muted); if (action != null) { Spacer(Modifier.height(12.dp)); Button(onClick = onAction) { Text(action) } } } }
 
 @Composable fun EstimateDetailScreen(model: AuthViewModel, id: String, onReturn: () -> Unit) {
     var estimate by remember(id) { mutableStateOf<EstimateDetail?>(null) }
@@ -144,7 +155,7 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
         catch (e: Exception) { error = e.message ?: "Could not load this estimate. Retry." }
         finally { loading = false }
     }
-    Column(Modifier.fillMaxSize().background(Color(0xFFF7F8F6))) {
+    Column(Modifier.fillMaxSize().background(EzBossDesign.Canvas)) {
         Row(Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = onReturn) { Icon(Icons.Default.ArrowBack, "Return to estimates") }; Text("Back to estimates", Modifier.clickable(onClick = onReturn).padding(8.dp), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold) }
         HorizontalDivider()
         if (loading) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -155,9 +166,9 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
                 Row { estimateDashboardTabs(value.estimateState == "change-order").forEach { contract ->
                     val name = contract.label
                     val enabled = contract.enabled
-                    Column(Modifier.clickable(enabled = enabled) { tab = name }.padding(horizontal = 12.dp, vertical = 13.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text(name, color = if (tab == name) MaterialTheme.colorScheme.primary else Color(0xFF68736D), fontSize = 13.sp, fontWeight = if (tab == name) FontWeight.SemiBold else FontWeight.Normal); if (!enabled) Text("Coming soon", color = Color(0xFF8B948F), fontSize = 9.sp) }
+                    Column(Modifier.clickable(enabled = enabled) { tab = name }.padding(horizontal = 12.dp, vertical = 13.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text(name, color = if (tab == name) MaterialTheme.colorScheme.primary else EzBossDesign.Muted, fontSize = 13.sp, fontWeight = if (tab == name) FontWeight.SemiBold else FontWeight.Normal); if (!enabled) Text("Coming soon", color = EzBossDesign.Muted, fontSize = 9.sp) }
                 } }
-                HorizontalDivider(color = Color(0xFFE3E9E5))
+                HorizontalDivider(color = EzBossDesign.Border)
             }
             if (tab == "Estimate") EstimateInformation(value) else ClientPreview(value)
         }
@@ -167,15 +178,15 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
 @Composable private fun EstimateInformation(value: EstimateDetail) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(value.invoiceNumber?.takeIf { value.estimateState == "invoice" } ?: value.number, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("${label(value.estimateState)} · Client status: ${value.clientState?.let(::label) ?: "None"}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { StatusBadge(label(value.estimateState), value.estimateState); StatusBadge(value.clientState?.let(::label) ?: "No client status", value.clientState) }
         DetailSection("Customer / project") { Text(value.customer); if (value.email.isNotBlank()) Text(value.email); if (value.phone.isNotBlank()) Text(value.phone); if (value.address.isNotBlank()) Text(value.address); if (value.projectDescription.isNotBlank()) Text(value.projectDescription) }
-        if (value.validUntil.isNotBlank()) Text("Valid until ${value.validUntil}", color = Color(0xFF66716B))
+        if (value.validUntil.isNotBlank()) Text("Valid until ${value.validUntil}", color = EzBossDesign.Muted)
         DetailSection("Line items") {
             if (value.lines.isEmpty()) Text("No line items")
-            else value.lines.sortedBy { it.sortOrder }.forEach { line -> Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) { Column(Modifier.weight(1f)) { Text(line.description, fontWeight = FontWeight.Medium); Text("${line.quantity} × ${money(line.unitPrice)}", color = Color(0xFF66716B), fontSize = 12.sp) }; Text(money(line.total), fontWeight = FontWeight.SemiBold) }; HorizontalDivider() }
+            else value.lines.sortedBy { it.sortOrder }.forEach { line -> Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) { Column(Modifier.weight(1f)) { Text(line.description, fontWeight = FontWeight.Medium); Text("${line.quantity} × ${money(line.unitPrice)}", color = EzBossDesign.Muted, fontSize = 12.sp) }; Text(money(line.total), fontWeight = FontWeight.SemiBold) }; HorizontalDivider() }
         }
         DetailSection("Totals") { TotalRow("Subtotal", value.subtotal); TotalRow("Tax (${value.taxRate}%)", value.tax); HorizontalDivider(); TotalRow("Total", value.total, true) }
-        Text("Editing, sending, payments, and other estimate actions are TODO.", color = Color(0xFF66716B), fontSize = 12.sp)
+        Text("Editing, sending, payments, and other estimate actions are TODO.", color = EzBossDesign.Muted, fontSize = 12.sp)
     }
 }
 
@@ -183,13 +194,13 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
     if (!value.showEstimate) { StateMessage("Estimate hidden from customer", "Client View settings disable the estimate section.", null) {}; return }
     val visibleLines = value.lines.filterNot { it.id in value.hidden }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Column(Modifier.fillMaxWidth().background(Color.White).border(1.dp, Color(0xFFE1E7E3)).padding(18.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Column(Modifier.fillMaxWidth().background(Color.White, EzBossDesign.CardShape).border(1.dp, EzBossDesign.Border, EzBossDesign.CardShape).padding(18.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Text(if (value.estimateState == "invoice") "Invoice" else if (value.estimateState == "change-order") "Change Order" else "Estimate", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Text("#${value.invoiceNumber.takeIf { value.estimateState == "invoice" } ?: value.number}", color = Color(0xFF66716B))
+            Text("#${value.invoiceNumber.takeIf { value.estimateState == "invoice" } ?: value.number}", color = EzBossDesign.Muted)
             if (value.contractor.isNotBlank()) Text(value.contractor, fontWeight = FontWeight.SemiBold)
-            listOf(value.contractorAddress, value.contractorPhone, value.contractorEmail, value.contractorWebsite).filter(String::isNotBlank).forEach { Text(it, fontSize = 12.sp, color = Color(0xFF66716B)) }
+            listOf(value.contractorAddress, value.contractorPhone, value.contractorEmail, value.contractorWebsite).filter(String::isNotBlank).forEach { Text(it, fontSize = 12.sp, color = EzBossDesign.Muted) }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            Text("Prepared for", fontSize = 11.sp, color = Color(0xFF66716B)); Text(value.customer, fontWeight = FontWeight.SemiBold)
+            Text("Prepared for", fontSize = 11.sp, color = EzBossDesign.Muted); Text(value.customer, fontWeight = FontWeight.SemiBold)
             if (value.address.isNotBlank()) Text(value.address, fontSize = 13.sp)
         }
         if (value.projectDescription.isNotBlank()) Text(value.projectDescription, Modifier.fillMaxWidth().background(Color.White).padding(16.dp))
@@ -204,16 +215,16 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
         grouped.forEach { (groupName, lines) -> DetailSection(groupName) { lines.forEach { line ->
             val itemGroup = value.groups.firstOrNull { it.id == line.groupId }
             val mayShowItemPrices = value.showItemPrices && (value.displayMode != "byGroup" || (value.showGroupPrices && itemGroup?.showPrice != false))
-            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) { Column(Modifier.weight(1f)) { Text(line.description); if (mayShowItemPrices && value.displayMode != "byType") Text("${line.quantity} × ${money(line.unitPrice)}", fontSize = 11.sp, color = Color(0xFF66716B)) }; if (mayShowItemPrices) Text(money(line.total), fontWeight = FontWeight.Medium) }; HorizontalDivider()
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) { Column(Modifier.weight(1f)) { Text(line.description); if (mayShowItemPrices && value.displayMode != "byType") Text("${line.quantity} × ${money(line.unitPrice)}", fontSize = 11.sp, color = EzBossDesign.Muted) }; if (mayShowItemPrices) Text(money(line.total), fontWeight = FontWeight.Medium) }; HorizontalDivider()
         } } }
         val shownSubtotal = visibleLines.sumOf { it.total }
         val shownDiscount = if (value.discountType == "percentage") shownSubtotal * value.discount / 100.0 else value.discount
         val shownTax = (shownSubtotal - shownDiscount) * value.taxRate / 100.0
         val shownTotal = shownSubtotal - shownDiscount + shownTax
         DetailSection("Summary") { if (value.showSubtotal) TotalRow("Subtotal", shownSubtotal); if (value.showTax) TotalRow("Tax", shownTax); if (value.showTotal) { HorizontalDivider(); TotalRow("Total", shownTotal, true) } }
-        Text("Internal preview · customer actions are disabled", Modifier.align(Alignment.CenterHorizontally), color = Color(0xFF66716B), fontSize = 12.sp)
+        Text("Internal preview · customer actions are disabled", Modifier.align(Alignment.CenterHorizontally), color = EzBossDesign.Muted, fontSize = 12.sp)
     }
 }
 
-@Composable private fun DetailSection(title: String, content: @Composable ColumnScope.() -> Unit) { Column(Modifier.fillMaxWidth().background(Color.White).border(1.dp, Color(0xFFE1E7E3)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp), content = { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp); content() }) }
+@Composable private fun DetailSection(title: String, content: @Composable ColumnScope.() -> Unit) { Column(Modifier.fillMaxWidth().background(Color.White, EzBossDesign.CardShape).border(1.dp, EzBossDesign.Border, EzBossDesign.CardShape).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp), content = { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp); content() }) }
 @Composable private fun TotalRow(title: String, amount: Double, strong: Boolean = false) { Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.SpaceBetween) { Text(title, fontWeight = if (strong) FontWeight.Bold else FontWeight.Normal); Text(money(amount), fontWeight = if (strong) FontWeight.Bold else FontWeight.Medium) } }

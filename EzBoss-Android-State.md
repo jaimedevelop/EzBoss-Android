@@ -1,6 +1,6 @@
 # EzBoss Android State
 
-Updated: 2026-09-28
+Updated: 2026-09-29
 
 ## Current state
 
@@ -8,7 +8,7 @@ A single-module native Android app uses Kotlin, Jetpack Compose, Auth0 Android S
 
 ## Architecture and file locations
 
-- `app/src/main/java/pro/ezboss/mobile/MainActivity.kt`: Compose app entry, branded Sign In screen, `AuthViewModel`, and authenticated shell. Estimates and `estimates/{estimateId}` are authenticated routes; the other six destinations remain title/Coming soon placeholders. The shell header, profile, drawer, and Sign Out wrap the protected host. The estimate detail page has its own “Back to estimates” action while the global hamburger stays in the persistent shell header.
+- `app/src/main/java/pro/ezboss/mobile/MainActivity.kt`: Compose app entry, branded Sign In screen, `AuthViewModel`, and authenticated shell. Estimates and `estimates/{estimateId}` are authenticated routes; the other six destinations remain title/Coming soon placeholders. The shell profile, drawer, and Sign Out wrap the protected host. The former persistent "EzBoss" top bar has been removed; the drawer control is now a white elevated floating button at the safe top-left above both page content and the open drawer.
 - `app/src/main/res/values/styles.xml`: native Android system accent uses the web app's orange-600 (`#EA580C`); Compose branding, buttons, navigation drawer, selected destinations, progress, and estimate accents use the same primary orange palette.
 - `app/src/main/java/pro/ezboss/mobile/Estimates.kt`: estimate browsing, square two-column cards, debounced customer search, document/client state filters, retry/empty/access states, load-more, detail content, dashboard tabs, and read-only client preview. Search/filter values, loaded cards, and grid scroll state use saveable navigation state on detail return.
 - `app/src/main/java/pro/ezboss/mobile/EstimateContracts.kt`: explicit mapping for estimateState/clientState filter values and dashboard tab order/availability.
@@ -46,7 +46,7 @@ auth0Audience=YOUR_EXISTING_API_AUDIENCE
 apiBaseUrl=https://YOUR_EZBOSS_API_ORIGIN
 ```
 
-Auth0 dashboard setup: create a **Native** application with package `pro.ezboss.mobile`; enable Authorization Code Grant/PKCE; allow callback `https://YOUR_TENANT.us.auth0.com/android/pro.ezboss.mobile/callback`; add the same SDK return URL to Allowed Logout URLs if remote Auth0 browser logout is later enabled; configure the existing API audience and appropriate API scopes. No client secret belongs in Android. No real tenant values were available in this task.
+Auth0 dashboard setup: create a **Native** application with package `pro.ezboss.mobile`; enable Authorization Code Grant/PKCE; allow callback `pro.ezboss.mobile://YOUR_TENANT.us.auth0.com/android/pro.ezboss.mobile/callback`; add the same SDK return URL to Allowed Logout URLs if remote Auth0 browser logout is later enabled; configure the existing API audience and appropriate API scopes. No client secret belongs in Android. No real tenant values were available in this task.
 
 ## Verification performed
 
@@ -73,6 +73,13 @@ Auth0 dashboard setup: create a **Native** application with package `pro.ezboss.
 - Mobile sign-up remains TODO.
 
 ## Change log
+
+- 2026-09-29: Removed the authenticated-shell top app bar and its "EzBoss" label. The hamburger/close control is now a 56dp elevated floating action button at the safe top-left, layered over the active content and the drawer. Source inspection completed; Android build/emulator verification remains pending.
+
+- 2026-09-29: Read emulator `EzBossAuth` logs and confirmed current login blocker: Auth0 returns `invalid_request`, saying the Android client is not authorized for resource server `https://api.ezboss.pro`. Callback delivery succeeds. Tenant-side User-Delegated Access authorization for the Native client remains required; no tenant settings were changed. Updated README with the remediation. Replaced the SDK RedirectActivity manifest declaration to remove HTTPS `autoVerify` from the existing custom-scheme callback without inheriting a duplicate SDK filter. `:app:processDebugManifest --offline` passed with cached Java 21; parsed merged manifest confirms exactly one custom-scheme filter and no autoVerify. `git diff --check` passed. End-to-end login remains pending the Auth0 configuration fix.
+
+- 2026-09-29: Login failures now keep the original Auth0 error, log its diagnostic details (Auth0 code, status, and description) under `EzBossAuth`, and make Retry initiate login again rather than attempting to restore credentials that do not exist. Build verification remains pending because the Gradle wrapper bootstrap JAR is missing.
+- 2026-09-29: Aligned the Android manifest, browser login/logout calls, and Auth0 setup documentation on the registered `pro.ezboss.mobile` custom-scheme callback. Build verification remains pending because the Gradle wrapper bootstrap JAR is missing. The local Auth0 client ID must be the Native application's Client ID, never its client secret.
 
 - 2026-09-28: Updated the Android app theme to match web orange-600 (`#EA580C`), including Compose primary/secondary colors, login and shell branding, drawer states/profile, estimate accents, and native system accent. `git diff --check` passes; Android build and on-device visual verification remain pending because the Gradle wrapper bootstrap JAR is unavailable.
 - 2026-09-28: Fixed reported Kotlin compile errors in `Estimates.kt` (named `clickable` callback) and `auth/AuthRepository.kt` (Auth0 4.0.1 public credentials-manager constructor, typed login callback with cancellation guards, and generated `BuildConfig` import). No dependency/configuration changes. Kotlin compilation passes; unit-test limitation is recorded above.

@@ -1,11 +1,12 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <application android:theme="@style/Theme.EzBoss" android:label="EzBoss" android:usesCleartextTraffic="false">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
-        <activity android:name="com.auth0.android.provider.RedirectActivity" android:exported="true">
-            <intent-filter android:autoVerify="true">
+        <!-- Replace the SDK's HTTPS auto-verify filter because this app uses a custom scheme. -->
+        <activity android:name="com.auth0.android.provider.RedirectActivity" android:exported="true" tools:node="replace">
+            <intent-filter>
                 <action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/>
                 <data android:host="${auth0Domain}" android:pathPrefix="/android/pro.ezboss.mobile/callback" android:scheme="${auth0Scheme}" />
             </intent-filter>

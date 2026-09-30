@@ -1,6 +1,7 @@
 package pro.ezboss.mobile
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -12,6 +13,8 @@ import androidx.navigation.compose.rememberNavController
 import com.auth0.android.authentication.AuthenticationException
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -41,10 +44,11 @@ import pro.ezboss.mobile.data.Account
 import pro.ezboss.mobile.data.ApiClient
 import pro.ezboss.mobile.data.ApiException
 
-private val BrandOrange = Color(0xFFEA580C)
-private val DrawerOrange = Color(0xFFC2410C)
-private val Canvas = Color(0xFFF7F8F6)
-private val Ink = Color(0xFF17231F)
+import pro.ezboss.mobile.ui.theme.*
+
+private val BrandOrange = EzBossDesign.Orange
+private val Canvas = EzBossDesign.Canvas
+private val Ink = EzBossDesign.Ink
 
 private data class AppDestination(val title: String, val route: String)
 
@@ -89,7 +93,17 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
         try { initialize(auth.login(activity).accessToken) }
         catch (e: Exception) {
             if (e.isAuthenticationCanceled()) state = AuthState.SignedOut
-            else state = AuthState.Error(e.message ?: "Sign in failed. Please try again.")
+            else {
+                Log.e("EzBossAuth", "Auth0 sign-in failed", e)
+                (e as? AuthenticationException)?.let { authError ->
+                    Log.e(
+                        "EzBossAuth",
+                        "Auth0 response: code=${authError.getCode()}, status=${authError.statusCode}, " +
+                            "description=${authError.getDescription()}",
+                    )
+                }
+                state = AuthState.Error(e.message ?: "Sign in failed. Please try again.", retryLogin = true)
+            }
         } finally { busy = false }
     }
 
@@ -132,7 +146,7 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                 drawerOpen = false
                 LoginScreen(model, current.message, current.sessionExpired) {
                     if (current.sessionExpired) model.signOut(activity)
-                    else if (current.message == MissingAuthConfiguration().message) model.signIn(activity)
+                    else if (current.message == MissingAuthConfiguration().message || current.retryLogin) model.signIn(activity)
                     else model.retry()
                 }
             }
@@ -148,17 +162,17 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
 }
 
 @Composable private fun LoginScreen(model: AuthViewModel, error: String?, expired: Boolean = false, onAction: () -> Unit) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 30.dp), horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.Center) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 30.dp, vertical = 24.dp), horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.Center) {
         Text("EzBoss", color = BrandOrange, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(56.dp))
         Text("Welcome back", color = Ink, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(10.dp))
-        Text("Sign in to manage your business.", color = Color(0xFF66716B), style = MaterialTheme.typography.bodyLarge)
+        Text("Sign in to manage your business.", color = EzBossDesign.Muted, style = MaterialTheme.typography.bodyLarge)
         if (error != null) {
             Spacer(Modifier.height(24.dp)); Text(error, color = MaterialTheme.colorScheme.error)
             Spacer(Modifier.height(12.dp))
         } else Spacer(Modifier.height(28.dp))
-        Button(onClick = onAction, enabled = !model.busy, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = BrandOrange)) {
+        Button(onClick = onAction, enabled = !model.busy, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = EzBossDesign.OrangeDark)) {
             if (model.busy) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
             else Text(if (error == null || expired) "Sign In" else "Retry", fontWeight = FontWeight.SemiBold)
         }
@@ -172,24 +186,17 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     BackHandler(enabled = !open && navController.previousBackStackEntry != null) { navController.popBackStack() }
     BoxWithConstraints(Modifier.fillMaxSize().background(Canvas)) {
         val drawerWidth = minOf(maxWidth * .84f, 340.dp)
-        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-            Row(Modifier.fillMaxWidth().height(64.dp).background(Color.White), verticalAlignment = Alignment.CenterVertically) {
-                MenuButton(open, onToggle)
-                Text("EzBoss", color = BrandOrange, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            }
-            HorizontalDivider(color = Color(0xFFE3E9E5))
-            Box(Modifier.weight(1f).fillMaxWidth().imePadding()) {
-                AuthenticatedDestinationHost(navController, model)
-            }
+        Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).imePadding()) {
+            AuthenticatedDestinationHost(navController, model)
         }
         if (open) {
             Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).background(Color(0x800E1916)).clickable(
                 interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = onDismiss,
             ).semantics { contentDescription = "Dismiss navigation drawer" })
-            Column(Modifier.align(Alignment.TopStart).windowInsetsPadding(WindowInsets.safeDrawing).width(drawerWidth).fillMaxHeight().imePadding().background(DrawerOrange).padding(18.dp)) {
+            Column(Modifier.align(Alignment.TopStart).windowInsetsPadding(WindowInsets.safeDrawing).width(drawerWidth).fillMaxHeight().imePadding().background(EzBossDesign.Navy).padding(18.dp)) {
                 ProfileArea(account)
-                Spacer(Modifier.height(20.dp)); HorizontalDivider(color = Color(0xFF9A3412))
-                Column(Modifier.weight(1f).fillMaxWidth().semantics { contentDescription = "Navigation destinations" }) {
+                Spacer(Modifier.height(20.dp)); HorizontalDivider(color = EzBossDesign.NavySurface)
+                Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).semantics { contentDescription = "Navigation destinations" }) {
                     appDestinations.forEach { destination ->
                         val selected = selectedRoute == destination.route || (destination.route == "estimates" && selectedRoute == EstimateDetailRoute)
                         NavigationDestinationRow(destination.title, selected) {
@@ -198,14 +205,14 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                         }
                     }
                 }
-                HorizontalDivider(color = Color(0xFF9A3412)); Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = EzBossDesign.NavySurface); Spacer(Modifier.height(12.dp))
                 TextButton(onClick = onSignOut, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFFFB49B))) {
                     Text(if (busy) "Signing out…" else "Sign Out", fontWeight = FontWeight.SemiBold)
                 }
             }
         }
-        // The same menu control is above the drawer and scrim in both states.
-        Row(Modifier.align(Alignment.TopStart).windowInsetsPadding(WindowInsets.safeDrawing).fillMaxWidth().height(64.dp), verticalAlignment = Alignment.CenterVertically) { MenuButton(open, onToggle) }
+        // Keep the menu available above both the page and the open drawer.
+        MenuButton(open, onToggle, Modifier.align(Alignment.TopStart).statusBarsPadding().padding(12.dp))
     }
 }
 
@@ -225,7 +232,7 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
 }
 
 @Composable private fun NavigationDestinationRow(title: String, selected: Boolean, onClick: () -> Unit) {
-    val background = if (selected) Color(0xFF9A3412) else Color.Transparent
+    val background = if (selected) BrandOrange else Color.Transparent
     TextButton(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).heightIn(min = 48.dp),
@@ -240,13 +247,19 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     Column(Modifier.fillMaxSize().padding(24.dp)) {
         Text(title, color = Ink, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(10.dp))
-        Text("Coming soon", color = Color(0xFF66716B), style = MaterialTheme.typography.bodyLarge)
+        Text("Coming soon", color = EzBossDesign.Muted, style = MaterialTheme.typography.bodyLarge)
     }
 }
 
-@Composable private fun MenuButton(open: Boolean, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(56.dp).semantics { contentDescription = if (open) "Close navigation drawer" else "Open navigation drawer" }) {
-        Icon(if (open) Icons.Filled.Close else Icons.Filled.Menu, contentDescription = null, tint = BrandOrange)
+@Composable private fun MenuButton(open: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    FloatingActionButton(
+        onClick = onClick,
+        modifier = modifier.size(56.dp).semantics { contentDescription = if (open) "Close navigation drawer" else "Open navigation drawer" },
+        containerColor = Color.White,
+        contentColor = BrandOrange,
+        elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp, pressedElevation = 8.dp),
+    ) {
+        Icon(if (open) Icons.Filled.Close else Icons.Filled.Menu, contentDescription = null)
     }
 }
 
@@ -254,18 +267,14 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     val name = account.displayName?.takeIf(String::isNotBlank)
     val initials = name?.split(Regex("\\s+")).orEmpty().take(2).mapNotNull { it.firstOrNull()?.uppercaseChar() }.joinToString("")
         .ifBlank { account.email.firstOrNull()?.uppercaseChar()?.toString() ?: "E" }
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Color(0xFF9A3412)).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(EzBossDesign.NavySurface).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(72.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFFFFEDD5)), contentAlignment = Alignment.Center) {
-            Text(initials, color = DrawerOrange, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text(initials, color = EzBossDesign.OrangeDark, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         }
         Spacer(Modifier.height(12.dp))
         Text(name ?: account.email.ifBlank { "EzBoss user" }, color = Color.White, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (name != null && account.email.isNotBlank()) Text(account.email, color = Color(0xFFFFD7BD), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (name != null && account.email.isNotBlank()) Text(account.email, color = EzBossDesign.DrawerText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
-}
-
-@Composable private fun EzBossTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = lightColorScheme(primary = BrandOrange, onPrimary = Color.White, secondary = DrawerOrange, background = Canvas, surface = Canvas, onSurface = Ink), content = content)
 }
 
 private fun Throwable.isAuthenticationCanceled(): Boolean = this is AuthenticationException && isCanceled

@@ -6,5 +6,9 @@ sealed interface AuthState {
     data object Loading : AuthState
     data object SignedOut : AuthState
     data class Authenticated(val account: Account) : AuthState
-    data class Error(val message: String, val sessionExpired: Boolean = false) : AuthState
+    data class Error(
+        val message: String,
+        val sessionExpired: Boolean = false,
+        val retryLogin: Boolean = false,
+    ) : AuthState
 }

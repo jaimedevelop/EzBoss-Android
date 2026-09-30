@@ -36,7 +36,9 @@ class AuthRepository(context: Context, private val config: AuthConfiguration) {
     suspend fun login(activity: Activity): SessionCredentials {
         requireConfigured()
         val credentials = suspendCancellableCoroutine<Credentials> { continuation ->
-            WebAuthProvider.login(account!!).withAudience(config.audience)
+            WebAuthProvider.login(account!!)
+                .withScheme("pro.ezboss.mobile")
+                .withAudience(config.audience)
                 .withScope("openid profile email offline_access")
                 .start(activity, object : Callback<Credentials, AuthenticationException> {
                     override fun onSuccess(result: Credentials) {
@@ -70,7 +72,9 @@ class AuthRepository(context: Context, private val config: AuthConfiguration) {
         // Clear local tokens even if the browser logout is cancelled or unavailable.
         manager.clearCredentials()
         suspendCancellableCoroutine<Unit> { continuation ->
-            WebAuthProvider.logout(account).start(activity, object : Callback<Void?, com.auth0.android.authentication.AuthenticationException> {
+            WebAuthProvider.logout(account)
+                .withScheme("pro.ezboss.mobile")
+                .start(activity, object : Callback<Void?, com.auth0.android.authentication.AuthenticationException> {
                 override fun onSuccess(result: Void?) { if (continuation.isActive) continuation.resume(Unit) }
                 override fun onFailure(error: com.auth0.android.authentication.AuthenticationException) {
                     if (continuation.isActive) continuation.resumeWithException(error)
