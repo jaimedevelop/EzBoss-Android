@@ -36,9 +36,9 @@ private val clientStates = listOf("Any", "Sent", "Viewed", "Accepted", "Denied",
 private fun money(value: Double) = NumberFormat.getCurrencyInstance(Locale.US).format(value)
 private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
 
-@Composable fun EstimatesListScreen(model: AuthViewModel, onOpen: (String) -> Unit) {
+@Composable fun EstimatesListScreen(model: AuthViewModel, initialFilter: String = "All", onOpen: (String) -> Unit) {
     var search by rememberSaveable { mutableStateOf("") }
-    var estimateFilter by rememberSaveable { mutableStateOf("All") }
+    var estimateFilter by rememberSaveable { mutableStateOf(initialFilter) }
     var clientFilter by rememberSaveable { mutableStateOf("Any") }
     var filtersOpen by rememberSaveable { mutableStateOf(false) }
     var rows by rememberSaveable(stateSaver = estimateRowsSaver) { mutableStateOf(emptyList()) }

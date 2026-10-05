@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -20,9 +22,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Menu
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.systemGestureExclusion
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.key
@@ -53,6 +58,7 @@ private val Ink = EzBossDesign.Ink
 private data class AppDestination(val title: String, val route: String)
 
 private val appDestinations = listOf(
+    AppDestination("Dashboard", "dashboard"),
     AppDestination("Estimates", "estimates"),
     AppDestination("Inventory", "inventory"),
     AppDestination("Collections", "collections"),
@@ -79,6 +85,7 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     var state by mutableStateOf<AuthState>(AuthState.Loading); private set
     var busy by mutableStateOf(false); private set
     suspend fun estimatePage(customer: String, estimateState: String?, clientState: String?, offset: Int) = api.estimates(auth.accessToken(), customer, estimateState, clientState, offset)
+    suspend fun dashboardData(path: String) = api.dashboardData(auth.accessToken(), path)
     suspend fun estimate(id: String) = api.estimate(auth.accessToken(), id)
 
     fun restore() = viewModelScope.launch {
@@ -151,7 +158,7 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                 }
             }
             is AuthState.Authenticated -> key(protectedSession) {
-        AuthenticatedShell(current.account, model, drawerOpen, { drawerOpen = !drawerOpen }, { drawerOpen = false }, model.busy) {
+        AuthenticatedShell(current.account, model, drawerOpen, { drawerOpen = true }, { drawerOpen = false }, model.busy) {
                     drawerOpen = false
                     protectedSession++
                     model.signOut(activity)
@@ -179,15 +186,21 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     }
 }
 
-@Composable private fun AuthenticatedShell(account: Account, model: AuthViewModel, open: Boolean, onToggle: () -> Unit, onDismiss: () -> Unit, busy: Boolean, onSignOut: () -> Unit) {
+@Composable private fun AuthenticatedShell(account: Account, model: AuthViewModel, open: Boolean, onOpen: () -> Unit, onDismiss: () -> Unit, busy: Boolean, onSignOut: () -> Unit) {
     val navController = rememberNavController()
     val backStack by navController.currentBackStackEntryAsState()
     val selectedRoute = backStack?.destination?.route ?: appDestinations.first().route
     BackHandler(enabled = !open && navController.previousBackStackEntry != null) { navController.popBackStack() }
-    BoxWithConstraints(Modifier.fillMaxSize().background(Canvas)) {
+    val openingDistance = with(LocalDensity.current) { 48.dp.toPx() }
+    BoxWithConstraints(Modifier.fillMaxSize().background(Canvas).semantics {
+        customActions = listOf(CustomAccessibilityAction(if (open) "Close navigation drawer" else "Open navigation drawer") {
+            if (open) onDismiss() else onOpen()
+            true
+        })
+    }) {
         val drawerWidth = minOf(maxWidth * .84f, 340.dp)
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).imePadding()) {
-            AuthenticatedDestinationHost(navController, model)
+            AuthenticatedDestinationHost(navController, model, account)
         }
         if (open) {
             Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).background(Color(0x800E1916)).clickable(
@@ -198,7 +211,7 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                 Spacer(Modifier.height(20.dp)); HorizontalDivider(color = EzBossDesign.NavySurface)
                 Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).semantics { contentDescription = "Navigation destinations" }) {
                     appDestinations.forEach { destination ->
-                        val selected = selectedRoute == destination.route || (destination.route == "estimates" && selectedRoute == EstimateDetailRoute)
+                        val selected = selectedRoute.substringBefore("?") == destination.route || (destination.route == "estimates" && selectedRoute == EstimateDetailRoute)
                         NavigationDestinationRow(destination.title, selected) {
                             if (!selected) navController.navigate(destination.route) { launchSingleTop = true }
                             onDismiss()
@@ -211,16 +224,34 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                 }
             }
         }
-        // Keep the menu available above both the page and the open drawer.
-        MenuButton(open, onToggle, Modifier.align(Alignment.TopStart).statusBarsPadding().padding(12.dp))
+        if (!open) {
+            // Reserve only the left edge; scrolling and gestures elsewhere stay with the page.
+            Box(Modifier.align(Alignment.CenterStart).windowInsetsPadding(WindowInsets.safeDrawing)
+                .width(24.dp).fillMaxHeight().systemGestureExclusion()
+                .pointerInput(openingDistance, onOpen) {
+                    var distance = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { distance = 0f },
+                        onDragEnd = { distance = 0f },
+                        onDragCancel = { distance = 0f },
+                    ) { change, dragAmount ->
+                        distance = (distance + dragAmount).coerceAtLeast(0f)
+                        if (distance >= openingDistance) {
+                            change.consume()
+                            onOpen()
+                        }
+                    }
+                })
+        }
     }
 }
 
-@Composable private fun AuthenticatedDestinationHost(navController: NavHostController, model: AuthViewModel) {
+@Composable private fun AuthenticatedDestinationHost(navController: NavHostController, model: AuthViewModel, account: Account) {
     NavHost(navController = navController, startDestination = appDestinations.first().route, modifier = Modifier.fillMaxSize()) {
         appDestinations.forEach { destination ->
-            composable(destination.route) {
-                if (destination.route == "estimates") EstimatesListScreen(model) { id -> navController.navigate("estimates/$id") }
+            composable(if (destination.route == "estimates") "estimates?type={type}" else destination.route, arguments = if (destination.route == "estimates") listOf(navArgument("type") { type = NavType.StringType; defaultValue = "all" }) else emptyList()) { entry ->
+                if (destination.route == "dashboard") DashboardScreen(account, model, { navController.navigate("estimates/$it") }, { navController.navigate(it) { launchSingleTop = true } })
+                else if (destination.route == "estimates") EstimatesListScreen(model, when(entry.arguments?.getString("type")) { "estimate" -> "Estimate"; "invoice" -> "Invoice"; else -> "All" }) { id -> navController.navigate("estimates/$id") }
                 else PlaceholderDestination(destination.title)
             }
         }
@@ -248,18 +279,6 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
         Text(title, color = Ink, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(10.dp))
         Text("Coming soon", color = EzBossDesign.Muted, style = MaterialTheme.typography.bodyLarge)
-    }
-}
-
-@Composable private fun MenuButton(open: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    FloatingActionButton(
-        onClick = onClick,
-        modifier = modifier.size(56.dp).semantics { contentDescription = if (open) "Close navigation drawer" else "Open navigation drawer" },
-        containerColor = Color.White,
-        contentColor = BrandOrange,
-        elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp, pressedElevation = 8.dp),
-    ) {
-        Icon(if (open) Icons.Filled.Close else Icons.Filled.Menu, contentDescription = null)
     }
 }
 

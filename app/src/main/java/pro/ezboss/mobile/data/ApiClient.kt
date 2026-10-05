@@ -49,15 +49,17 @@ class ApiClient(baseUrl: String) {
         estimateDetail(json)
     }
 
+    suspend fun dashboardData(token: String, path: String): Any = withContext(Dispatchers.IO) { get("$baseUrl/$path", token) }
+
     private fun get(url: String, token: String): Any = run {
         if (baseUrl.isBlank()) throw IllegalStateException("API base URL is not configured.")
         val request = Request.Builder().url(url).header("Authorization", "Bearer $token").get().build()
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw ApiException(response.code, when (response.code) {
                 401 -> "Your session has expired. Please sign in again."
-                403 -> "You don’t have permission to view estimates."
-                404 -> "This estimate is no longer available."
-                else -> "Could not load estimates (${response.code}). Please retry."
+                403 -> "You don’t have permission to view this data."
+                404 -> "This data is no longer available."
+                else -> "Could not load data (${response.code}). Please retry."
             })
             val body = response.body?.string() ?: throw IOException("Empty response")
             if (body.trimStart().startsWith("[")) JSONArray(body) else JSONObject(body)
