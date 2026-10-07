@@ -28,7 +28,7 @@ class ApiClient(baseUrl: String) {
             })
             val json = JSONObject(response.body?.string() ?: throw IOException("Empty account response"))
             Account(json.opt("id").toString(), json.optString("auth0Id"), json.optString("email"),
-                json.optString("displayName").takeIf(String::isNotBlank), json.optString("roleName").takeIf(String::isNotBlank),
+                usableName(json.opt("displayName")), usableName(json.opt("roleName")),
                 json.optBoolean("isSuperuser"), json.stringKeys("pageKeys"), json.stringKeys("featureKeys"))
         }
     }

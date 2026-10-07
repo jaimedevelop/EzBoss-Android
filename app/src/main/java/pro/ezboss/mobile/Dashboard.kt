@@ -1,5 +1,7 @@
 package pro.ezboss.mobile
 
+import pro.ezboss.mobile.data.dashboardGreetingName
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -57,7 +59,7 @@ internal fun dashboardDate(value: String, zone: ZoneId): LocalDate? = runCatchin
     LaunchedEffect(zone) { today = LocalDate.now(zone); while (true) { kotlinx.coroutines.delay(30_000); today = LocalDate.now(zone) } }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Column(Modifier.fillMaxWidth().background(EzBossDesign.HeaderBrush).padding(start = 84.dp, top = 24.dp, end = 16.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Welcome back, ${account.displayName?.trim()?.substringBefore(' ') ?: "User"}!", color = Color.White, style = MaterialTheme.typography.headlineMedium)
+            Text("Welcome back, ${dashboardGreetingName(profile?.opt("firstName"), account.displayName)}!", color = Color.White, style = MaterialTheme.typography.headlineMedium)
             Text("Here's what's happening with your business today.", color = Color.White)
             Text(today.format(DateTimeFormatter.ofPattern("EEEE, MMM d")), color = Color.White)
         }

@@ -1,6 +1,6 @@
 # EzBoss Android State
 
-Updated: 2026-10-05
+Updated: 2026-10-07
 
 ## Current state
 
@@ -98,3 +98,5 @@ Auth0 dashboard setup: create a **Native** application with package `pro.ezboss.
 - 2026-09-28: Replaced only Estimates placeholder with API-backed paged browsing, debounced name search, estimateState/clientState filters, detail tabs, and a visibility-aware read-only client preview. Added optional, bounded list pagination and null clientState filtering in sibling API while preserving unpaginated array response behavior. API focused tests and TypeScript build pass; Android compile/tests and emulator visual inspection remain unavailable due wrapper/native Gradle issues.
 
 - 2026-10-05: Replaced the floating hamburger/close button with left-edge swipe opening in `app/src/main/java/pro/ezboss/mobile/MainActivity.kt`. Added an accessibility open/close action; retained scrim, Back, destination selection, and sign-out behavior. No configuration changes. `git diff --check` passed. Kotlin compilation was blocked by sandbox access to the Gradle cache; requested escalation was declined. Compilation and on-device swipe/system-back/accessibility checks remain pending.
+
+- 2026-10-07: Dashboard greeting now uses `/profile.firstName`, matching web, then the account first name or User. Added `data/AccountNames.kt` normalization and applied it to account displayName/roleName in `data/ApiClient.kt`, preventing JSON null/legacy null strings in the sidebar. Added `data/AccountNamesTest.kt` for Joaquin/Jaime, profile precedence, contractor account fallback, and missing/null names. No configuration changes. Whitespace/source checks passed; compile and focused tests remain unverified because Gradle cache escalation was declined. Live account/device verification remains pending.
