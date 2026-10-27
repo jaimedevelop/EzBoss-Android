@@ -4,6 +4,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import pro.ezboss.mobile.auth.isSecureApiBaseUrl
 import org.json.JSONObject
 import org.json.JSONArray
 import java.io.IOException
@@ -13,21 +15,31 @@ import java.util.concurrent.TimeUnit
 data class Account(val id: String, val auth0Id: String, val email: String, val displayName: String?, val roleName: String?, val isSuperuser: Boolean, val pageKeys: List<String>, val featureKeys: List<String>)
 class ApiException(val statusCode: Int, message: String) : IOException(message)
 
-class ApiClient(baseUrl: String) {
+class ApiClient(baseUrl: String, transport: OkHttpClient = OkHttpClient()) {
     private val baseUrl = baseUrl.trimEnd('/')
-    private val http = OkHttpClient.Builder().callTimeout(20, TimeUnit.SECONDS).build()
+    private val http = transport.newBuilder().callTimeout(20, TimeUnit.SECONDS)
+        .followRedirects(false).followSslRedirects(false).build()
+
+    private fun requireSecureConfiguration(token: String) {
+        check(isSecureApiBaseUrl(baseUrl)) { "API base URL is not securely configured." }
+        if (token.isBlank()) throw ApiException(401, "Your session has expired. Please sign in again.")
+    }
 
     suspend fun currentUser(token: String): Account = withContext(Dispatchers.IO) {
-        if (baseUrl.isBlank()) throw IllegalStateException("API base URL is not configured.")
+        requireSecureConfiguration(token)
         val request = Request.Builder().url("$baseUrl/users/me").header("Authorization", "Bearer $token").get().build()
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw ApiException(response.code, when (response.code) {
                 401 -> "Your session has expired. Please sign in again."
+                403 -> "Access was denied. Contact your administrator or sign in with another account."
                 404 -> "Your EzBoss account is not initialized. Contact your administrator."
                 else -> "Could not load your EzBoss account (${response.code}). Please retry."
             })
             val json = JSONObject(response.body?.string() ?: throw IOException("Empty account response"))
-            Account(json.opt("id").toString(), json.optString("auth0Id"), json.optString("email"),
+            if (json.optString("status") != "active") throw ApiException(403, "This account is inactive. Contact your administrator.")
+            val accountId = json.optLong("id", 0)
+            if (accountId <= 0) throw IOException("Invalid account response")
+            Account(accountId.toString(), json.optString("auth0Id"), json.optString("email"),
                 usableName(json.opt("displayName")), usableName(json.opt("roleName")),
                 json.optBoolean("isSuperuser"), json.stringKeys("pageKeys"), json.stringKeys("featureKeys"))
         }
@@ -52,8 +64,11 @@ class ApiClient(baseUrl: String) {
     suspend fun dashboardData(token: String, path: String): Any = withContext(Dispatchers.IO) { get("$baseUrl/$path", token) }
 
     private fun get(url: String, token: String): Any = run {
-        if (baseUrl.isBlank()) throw IllegalStateException("API base URL is not configured.")
-        val request = Request.Builder().url(url).header("Authorization", "Bearer $token").get().build()
+        requireSecureConfiguration(token)
+        val target = url.toHttpUrlOrNull() ?: throw IOException("Invalid API request.")
+        val origin = baseUrl.toHttpUrlOrNull() ?: throw IOException("Invalid API configuration.")
+        check(target.scheme == origin.scheme && target.host == origin.host && target.port == origin.port) { "API destination is not allowed." }
+        val request = Request.Builder().url(target).header("Authorization", "Bearer $token").get().build()
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw ApiException(response.code, when (response.code) {
                 401 -> "Your session has expired. Please sign in again."

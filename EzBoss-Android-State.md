@@ -1,6 +1,6 @@
 # EzBoss Android State
 
-Updated: 2026-10-07
+Updated: 2026-10-27
 
 ## Current state
 
@@ -83,6 +83,8 @@ Auth0 dashboard setup: create a **Native** application with package `pro.ezboss.
 
 ## Change log
 
+- 2026-10-25: Launch planning source review confirmed `MainActivity.kt` still routes destinations other than Dashboard/Estimates to `PlaceholderDestination`. No Android behavior/configuration changed and no fresh Android build/device tests ran. Proposed weekly cross-platform scope, native companion milestones, verification gates and January schedule are recorded in `../docs/JANUARY_2027_LAUNCH_PLAN.md`; proposed native work is not implemented or accepted scope. Existing Android TODOs remain open.
+
 - 2026-09-29: Removed the authenticated-shell top app bar and its "EzBoss" label. The hamburger/close control is now a 56dp elevated floating action button at the safe top-left, layered over the active content and the drawer. Source inspection completed; Android build/emulator verification remains pending.
 
 - 2026-09-29: Read emulator `EzBossAuth` logs and confirmed current login blocker: Auth0 returns `invalid_request`, saying the Android client is not authorized for resource server `https://api.ezboss.pro`. Callback delivery succeeds. Tenant-side User-Delegated Access authorization for the Native client remains required; no tenant settings were changed. Updated README with the remediation. Replaced the SDK RedirectActivity manifest declaration to remove HTTPS `autoVerify` from the existing custom-scheme callback without inheriting a duplicate SDK filter. `:app:processDebugManifest --offline` passed with cached Java 21; parsed merged manifest confirms exactly one custom-scheme filter and no autoVerify. `git diff --check` passed. End-to-end login remains pending the Auth0 configuration fix.
@@ -100,3 +102,53 @@ Auth0 dashboard setup: create a **Native** application with package `pro.ezboss.
 - 2026-10-05: Replaced the floating hamburger/close button with left-edge swipe opening in `app/src/main/java/pro/ezboss/mobile/MainActivity.kt`. Added an accessibility open/close action; retained scrim, Back, destination selection, and sign-out behavior. No configuration changes. `git diff --check` passed. Kotlin compilation was blocked by sandbox access to the Gradle cache; requested escalation was declined. Compilation and on-device swipe/system-back/accessibility checks remain pending.
 
 - 2026-10-07: Dashboard greeting now uses `/profile.firstName`, matching web, then the account first name or User. Added `data/AccountNames.kt` normalization and applied it to account displayName/roleName in `data/ApiClient.kt`, preventing JSON null/legacy null strings in the sidebar. Added `data/AccountNamesTest.kt` for Joaquin/Jaime, profile precedence, contractor account fallback, and missing/null names. No configuration changes. Whitespace/source checks passed; compile and focused tests remain unverified because Gradle cache escalation was declined. Live account/device verification remains pending.
+
+
+## October 26 launch verification follow-up
+
+- Canonical project confirmed by Joaquin. Added `org.json:json:20250517` as a JVM-only test dependency in `app/build.gradle.kts`; fixes the reproduced Android stub `JSONObject.opt` failure without changing app runtime behavior.
+- Fresh `:app:assembleDebug :app:testDebugUnitTest` succeeds with cached Adoptium Java 21.0.7 and Gradle 8.13. Eight unit tests pass. Debug APK: `app/build/outputs/apk/debug/app-debug.apk`. Logs: `../docs/launch/evidence/2026-10-26/android-build-tests-retry.log`.
+- `adb devices -l` reports no connected device; install, live Auth0, list/detail and logout remain unverified. Initial assembly succeeded while unit tests failed; final combined rerun succeeds after the dependency fix.
+- Scope, four platform checklists, local TEST fixtures and outstanding cases: `../docs/launch/`. Selected cases remain unaccepted; native placeholders, SaaS/store billing, push and broader native implementation are still TODO. Auth0 TEST identity provisioning was blocked by connection-list API HTTP 403; no production data/configuration changed.
+- Preserved the pre-existing state-document edits. No physical-device acceptance or signing/distribution is claimed.
+
+
+## October 27 native auth/configuration increment
+
+- `auth/AuthConfiguration.kt`: fail-closed validation for domain-only Auth0 hosts,
+  public Native client IDs, audience and HTTPS API URLs without user info, query,
+  fragment or invalid port. Callback construction follows the application ID.
+- `app/build.gradle.kts`: retains the existing local-properties precedence and
+  JVM JSON fix; validates URL formats/placeholders and rejects named client-secret
+  and management-secret properties without logging values. Only four public
+  Auth0/API fields are generated. `APPLICATION_ID` supplies the SDK scheme.
+- `AndroidManifest.xml`: one exact `/android/${applicationId}/callback` path,
+  replacing the old prefix match; custom scheme has no HTTPS autoVerify.
+- `AuthRepository.kt` / `MainActivity.kt`: preserve coroutine cancellation,
+  serialize restore/login/retry/logout, remove raw Auth0 exception/description logs
+  and UI output, clear stale credentials before switching accounts, clear identity
+  credentials for 401/403, and remove protected navigation on business API 401.
+  Business API 403 remains an endpoint permission denial; no server guards changed.
+- `data/ApiClient.kt`: HTTPS configuration/token checks before transport, disabled
+  redirects, same-origin resource requests, and rejection of inactive/malformed
+  `/users/me` identities. API errors use fixed messages, not response bodies.
+- `scripts/check-config.py`: verifies the actual merged callback against generated
+  BuildConfig (one exact path/scheme/host, no autoVerify/cleartext, public fields).
+  README records setup, verification and remaining tenant delegated-access action.
+- Verification: Gradle 8.13 + cached Adoptium Java 21; offline debug assemble and
+  **17 JVM tests pass**. Expected failures verified for HTTP API URL, blank client
+  ID and server-secret property; secret sentinel absent from logs. Actual merged
+  callback/configuration checker passes. Evidence:
+  `../docs/launch/evidence/2026-10-27/native-foundation/`.
+- No emulator started or device installed in this task; build daemon exited.
+  Tenant allowlists, Native app identity/user-delegated access, live callback,
+  owner/employee login, refresh rotation and logout still require live verification.
+  Existing business screens/placeholders and server authorization were preserved.
+
+
+## October 28 AM native session task (implemented October 27)
+
+- `auth/AuthRepository.kt` now serializes secure credential reads/rotation, login persistence and deletion through `auth/CredentialGate.kt`. SDK callback completion is awaited even after caller cancellation, so logout deletes credentials after any pending rotation finishes. Deletion runs despite caller cancellation; cancelled login cannot save credentials. Invalid stored sessions are cleared. Requests ask for 30 seconds of token validity before use. Credential descriptions redact the access token.
+- `MainActivity.kt` revalidates `/users/me` when an authenticated app returns to foreground. `auth/SessionEpoch.kt` rejects obsolete resource results and 401s after revalidation/logout/account switch, preventing old calls from delivering data or clearing a newer session. Protected UI disappears on session failure. Resource 403 remains a business denial.
+- `AndroidManifest.xml` disables application backup; `scripts/check-config.py` verifies the merged setting as well as existing callback/config boundaries.
+- Focused JVM tests cover credential renewal/deletion ordering, cancellation while waiting for SDK completion, token description redaction and stale-session results. Verification and live prerequisites: `../docs/launch/OCTOBER_28_NATIVE_SESSION.md`. No emulator/device launched. Live PKCE callback, Keystore persistence and refresh rotation still require authorized staging/device acceptance; unit tests do not establish provider behavior.

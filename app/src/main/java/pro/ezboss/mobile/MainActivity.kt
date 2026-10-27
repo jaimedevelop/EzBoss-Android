@@ -1,7 +1,6 @@
 package pro.ezboss.mobile
 
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -44,6 +43,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import pro.ezboss.mobile.auth.*
 import pro.ezboss.mobile.data.Account
 import pro.ezboss.mobile.data.ApiClient
@@ -75,6 +75,11 @@ class MainActivity : ComponentActivity() {
     private val authConfig by lazy { authConfiguration() }
     private val model: AuthViewModel by viewModels { AuthViewModel.Factory(AuthRepository(applicationContext, authConfig), ApiClient(authConfig.apiBaseUrl)) }
 
+    override fun onStart() {
+        super.onStart()
+        model.revalidate()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { EzBossTheme { EzBossApp(model, this) } }
@@ -84,54 +89,101 @@ class MainActivity : ComponentActivity() {
 class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient) : ViewModel() {
     var state by mutableStateOf<AuthState>(AuthState.Loading); private set
     var busy by mutableStateOf(false); private set
-    suspend fun estimatePage(customer: String, estimateState: String?, clientState: String?, offset: Int) = api.estimates(auth.accessToken(), customer, estimateState, clientState, offset)
-    suspend fun dashboardData(path: String) = api.dashboardData(auth.accessToken(), path)
-    suspend fun estimate(id: String) = api.estimate(auth.accessToken(), id)
+    private val sessionEpoch = SessionEpoch()
+
+    fun revalidate() {
+        if (!busy && state is AuthState.Authenticated) restore()
+    }
+
+    private suspend fun <T> authenticatedRequest(request: suspend (String) -> T): T {
+        val epoch = sessionEpoch.current
+        val token = try { auth.accessToken() }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            sessionEpoch.requireCurrent(epoch)
+            sessionEpoch.advance()
+            state = AuthState.Error("Your session could not be restored. Please sign in again.", retryLogin = true)
+            auth.clearCredentials()
+            throw e
+        }
+        sessionEpoch.requireCurrent(epoch)
+        try {
+            val result = request(token)
+            sessionEpoch.requireCurrent(epoch)
+            return result
+        }
+        catch (e: ApiException) {
+            // A resource-level 403 remains a business permission denial, not a global logout.
+            sessionEpoch.requireCurrent(epoch)
+            if (e.statusCode == 401) {
+                sessionEpoch.advance()
+                state = AuthState.Error("Your session has expired. Please sign in again.", retryLogin = true)
+                auth.clearCredentials()
+            }
+            throw e
+        }
+    }
+    suspend fun estimatePage(customer: String, estimateState: String?, clientState: String?, offset: Int) = authenticatedRequest { api.estimates(it, customer, estimateState, clientState, offset) }
+    suspend fun dashboardData(path: String) = authenticatedRequest { api.dashboardData(it, path) }
+    suspend fun estimate(id: String) = authenticatedRequest { api.estimate(it, id) }
 
     fun restore() = viewModelScope.launch {
+        if (busy) return@launch
+        busy = true
+        sessionEpoch.advance()
         state = AuthState.Loading
         try { auth.restore()?.let { initialize(it.accessToken) } ?: run { state = AuthState.SignedOut } }
-        catch (e: Exception) { state = AuthState.Error(e.message ?: "Sign in is not configured.") }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { state = AuthState.Error("Sign in is not configured. Please contact your administrator.", retryLogin = true) }
+        finally { busy = false }
     }
 
     fun signIn(activity: ComponentActivity) = viewModelScope.launch {
         if (busy) return@launch
         busy = true
+        sessionEpoch.advance()
+        state = AuthState.Loading
+        auth.clearCredentials()
         try { initialize(auth.login(activity).accessToken) }
+        catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             if (e.isAuthenticationCanceled()) state = AuthState.SignedOut
-            else {
-                Log.e("EzBossAuth", "Auth0 sign-in failed", e)
-                (e as? AuthenticationException)?.let { authError ->
-                    Log.e(
-                        "EzBossAuth",
-                        "Auth0 response: code=${authError.getCode()}, status=${authError.statusCode}, " +
-                            "description=${authError.getDescription()}",
-                    )
-                }
-                state = AuthState.Error(e.message ?: "Sign in failed. Please try again.", retryLogin = true)
-            }
+            else state = AuthState.Error("Sign in could not finish. Please try again or contact your administrator.", retryLogin = true)
         } finally { busy = false }
     }
 
     private suspend fun initialize(token: String) {
         try { state = AuthState.Authenticated(api.currentUser(token)) }
         catch (e: ApiException) {
-            if (e.statusCode == 401) { auth.clearCredentials(); state = AuthState.Error(e.message ?: "Session expired.", true) }
-            else state = AuthState.Error(e.message ?: "Could not initialize your account.")
-        } catch (e: Exception) { state = AuthState.Error(e.message ?: "Could not connect to EzBoss. Check your connection and retry.") }
+            if (e.statusCode == 401 || e.statusCode == 403) {
+                auth.clearCredentials()
+                state = AuthState.Error(e.message ?: "Access was denied. Please sign in again.", retryLogin = true)
+            } else state = AuthState.Error(e.message ?: "Could not initialize your account.")
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { state = AuthState.Error("Could not connect to EzBoss. Check your connection and retry.") }
     }
 
     fun retry() = viewModelScope.launch {
+        if (busy) return@launch
+        busy = true
+        sessionEpoch.advance()
+        state = AuthState.Loading
         try { initialize(auth.accessToken()) }
-        catch (e: Exception) { state = AuthState.Error(e.message ?: "Could not restore your session.", true) }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) {
+            auth.clearCredentials()
+            state = AuthState.Error("Could not restore your session. Please sign in again.", retryLogin = true)
+        } finally { busy = false }
     }
 
     fun signOut(activity: ComponentActivity) = viewModelScope.launch {
+        if (busy) return@launch
         busy = true
+        sessionEpoch.advance()
         state = AuthState.SignedOut
-        try { auth.signOut(activity); state = AuthState.SignedOut }
-        catch (e: Exception) { state = AuthState.Error(e.message ?: "Could not sign out. Please try again.") }
+        try { auth.signOut(activity) }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { state = AuthState.Error("Signed out locally. Browser sign-out did not finish. Sign in again when ready.", retryLogin = true) }
         finally { busy = false }
     }
 

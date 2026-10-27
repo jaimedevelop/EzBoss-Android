@@ -49,3 +49,56 @@ are for HTTPS Android App Links and do not authorize access to the API. Moving t
 HTTPS requires changing the manifest scheme, both login/logout `withScheme` calls,
 and allowed callback/logout URLs together, plus verifying the domain association
 for the installed build's signing certificate.
+
+## Native foundation checks (October 27)
+
+Use a compatible Gradle JDK (17 or 21; this workspace was verified with cached
+Adoptium 21). Android Studio's Java 25 is not the verified Gradle runtime.
+
+```sh
+./gradlew --no-daemon --max-workers=2 :app:assembleDebug :app:testDebugUnitTest
+python3 scripts/check-config.py
+```
+
+The wrapper JAR is present. `--offline` can be added when dependencies are cached.
+These commands do not launch an emulator. A Gradle single-use build daemon exits
+at the end; do not leave simulators or watch servers running after tests.
+
+The build and runtime now reject placeholders, a URL in place of the Auth0 domain,
+and HTTP API URLs or URLs with user info/query/fragment/invalid port. Diagnostics
+list field names only. The build also rejects `auth0ClientSecret`,
+`AUTH0_CLIENT_SECRET`, `auth0ManagementClientSecret` and
+`AUTH0_MANAGEMENT_CLIENT_SECRET` in local or Gradle properties. Only the four
+allowlisted public identity/API properties are emitted to BuildConfig. Never copy
+server `.env` files into mobile configuration. A native client ID is public;
+validation cannot determine whether an opaque value was copied from a secret
+field. Confirm the application type and ID directly in Auth0.
+
+The SDK login/logout scheme derives from `BuildConfig.APPLICATION_ID`; the merged
+manifest uses the same application ID and exact `/android/APP_ID/callback` path.
+The checker compares the merged manifest with the generated BuildConfig without
+printing tenant values. Auth0 errors are no longer dumped to Logcat/UI. API
+redirects are disabled. `/users/me` rejects inactive or malformed identities;
+401/403 identity failures clear stored credentials. Business endpoint 401 removes
+the protected shell; business endpoint 403 remains a resource permission denial.
+Requests cannot grant business permissions locally.
+
+Live callback, renewal, logout and owner/employee acceptance remain pending tenant
+allowlists/user-delegated access and device checks. Compilation and mocked JVM
+checks do not prove live Auth0 behavior. The previously observed tenant-side
+resource-server authorization error must still be resolved in Auth0; no provider
+settings were changed by this work.
+
+
+### Native session lifecycle checks
+
+Credential operations share one manager and a serialized gate. Logout waits for an
+in-flight renewal to finish saving before deleting its rotated credentials, even
+if the original request is cancelled. Requests require 30 seconds of token validity.
+Application backup is disabled. Returning to the foreground revalidates API identity;
+old resource responses cannot change a newer session. Provider payloads and credential
+values are not shown in errors; credential descriptions are redacted.
+
+Run `./gradlew --offline --no-daemon --max-workers=2 :app:assembleDebug :app:testDebugUnitTest`
+with the documented compatible JDK, then `python3 scripts/check-config.py`.
+See `../docs/launch/OCTOBER_28_NATIVE_SESSION.md` for evidence and outstanding live acceptance.
