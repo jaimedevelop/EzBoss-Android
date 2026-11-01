@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
 import pro.ezboss.mobile.data.*
 import java.text.NumberFormat
 import java.util.Locale
+import org.json.JSONObject
 import org.json.JSONArray
 
 private val estimateRowsSaver = listSaver<List<EstimateListItem>, String>(
@@ -37,6 +38,11 @@ private fun money(value: Double) = NumberFormat.getCurrencyInstance(Locale.US).f
 private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
 
 @Composable fun EstimatesListScreen(model: AuthViewModel, initialFilter: String = "All", onOpen: (String) -> Unit) {
+    var creating by remember { mutableStateOf(false) }
+    if (creating) {
+        DraftEditorScreen(model, null, onClose = { creating = false }, onSaved = { creating = false; onOpen(it) })
+        return
+    }
     var search by rememberSaveable { mutableStateOf("") }
     var estimateFilter by rememberSaveable { mutableStateOf(initialFilter) }
     var clientFilter by rememberSaveable { mutableStateOf("Any") }
@@ -81,6 +87,7 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
 
     Column(Modifier.fillMaxSize().background(EzBossDesign.Canvas)) {
         PageHeading("Estimates", "Manage your estimates and invoices.")
+        TextButton(onClick = { creating = true }) { Text("Create estimate draft") }
         Row(Modifier.fillMaxWidth().padding(EzBossDesign.PagePadding), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = search, onValueChange = { search = it; criteriaChanged() },
@@ -142,6 +149,33 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
 @Composable private fun StateMessage(title: String, message: String, action: String?, onAction: () -> Unit) { Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 18.sp); Spacer(Modifier.height(8.dp)); Text(message, color = EzBossDesign.Muted); if (action != null) { Spacer(Modifier.height(12.dp)); Button(onClick = onAction) { Text(action) } } } }
 
 @Composable fun EstimateDetailScreen(model: AuthViewModel, id: String, onReturn: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var approvalOpen by remember { mutableStateOf(false) }
+    var approver by rememberSaveable { mutableStateOf("") }
+    var reason by rememberSaveable { mutableStateOf("") }
+    var approvalDate by rememberSaveable { mutableStateOf("") }
+    var acting by remember { mutableStateOf(false) }
+    var actionMessage by remember { mutableStateOf<String?>(null) }
+    var revokeWarning by remember { mutableStateOf(false) }
+    fun act(action: String, body: JSONObject = JSONObject()) { scope.launch {
+        acting = true; actionMessage = null
+        try {
+            val result = model.documentAction(id, action, body)
+            if (action == "share-link") {
+                context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(result.getString("url"))))
+            }
+            if (action == "record-approval") { approver = ""; reason = ""; approvalDate = "" }
+            actionMessage = when(action) { "send-email" -> "Email accepted for delivery; verify inbox receipt."; "issue-invoice" -> "Invoice created. Open it from Invoices."; "revoke-links" -> "Customer links revoked."; "record-approval" -> "Client approval recorded. Refresh to verify collection status."; else -> "Customer link prepared." }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { actionMessage = "Action was not confirmed. Refresh before retrying." }
+        finally { acting = false }
+    } }
+    var editing by remember { mutableStateOf(false) }
+    if (editing) {
+        DraftEditorScreen(model, id, onClose = { editing = false }, onSaved = { editing = false })
+        return
+    }
     var estimate by remember(id) { mutableStateOf<EstimateDetail?>(null) }
     var error by remember(id) { mutableStateOf<String?>(null) }
     var denied by remember(id) { mutableStateOf(false) }
@@ -162,6 +196,19 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
         else if (estimate == null) StateMessage(if (denied) "Access denied" else "Estimate unavailable", error ?: "This estimate may have been deleted.", if (denied) null else "Retry") { retry++ }
         else {
             val value = estimate!!
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                TextButton(onClick = { act("send-email") }, enabled = !acting) { Text("Send / resend") }
+                TextButton(onClick = { act("share-link") }, enabled = !acting) { Text("Customer view / checkout") }
+                if (value.estimateState in listOf("draft", "estimate")) TextButton(onClick = { act("issue-invoice") }, enabled = !acting) { Text("Issue invoice") }
+                TextButton(onClick = { revokeWarning = true }, enabled = !acting) { Text("Revoke links") }
+                TextButton(onClick = { retry++ }, enabled = !acting) { Text("Refresh") }
+            }
+            if (value.collectionHold) {
+                Text("Collection is on hold pending approval of revision ${value.currentRevision}.", Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
+            }
+            if (value.estimateState != "invoice" && (value.collectionHold || value.clientState != "accepted")) TextButton(onClick = { approvalOpen = true }, enabled = !acting) { Text("Record off-app client approval") }
+            actionMessage?.let { Text(it, Modifier.padding(horizontal = 16.dp)) }
+            TextButton(onClick = { editing = true }) { Text("Edit document") }
             Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(Color.White)) {
                 Row { estimateDashboardTabs(value.estimateState == "change-order").forEach { contract ->
                     val name = contract.label
@@ -173,6 +220,17 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
             if (tab == "Estimate") EstimateInformation(value) else ClientPreview(value)
         }
     }
+    if (approvalOpen) AlertDialog(onDismissRequest = { approvalOpen = false }, title = { Text("Record client approval") }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            OutlinedTextField(approver, { approver = it }, label = { Text("Client approver name") })
+            OutlinedTextField(reason, { reason = it }, label = { Text("Edit reason and approval evidence") })
+            OutlinedTextField(approvalDate, { approvalDate = it }, label = { Text("Approval date (YYYY-MM-DD)") })
+        }
+    }, confirmButton = { TextButton(onClick = {
+        approvalOpen = false
+        act("record-approval", JSONObject().put("expectedRevision", estimate?.currentRevision).put("approverName", approver).put("reason", reason).put("approvalDate", approvalDate))
+    }, enabled = approver.isNotBlank() && reason.isNotBlank() && approvalDate.isNotBlank()) { Text("Record approval") } }, dismissButton = { TextButton(onClick = { approvalOpen = false }) { Text("Cancel") } })
+    if (revokeWarning) AlertDialog(onDismissRequest = { revokeWarning = false }, title = { Text("Revoke customer links?") }, confirmButton = { TextButton(onClick = { revokeWarning = false; act("revoke-links") }) { Text("Revoke links") } }, dismissButton = { TextButton(onClick = { revokeWarning = false }) { Text("Cancel") } })
 }
 
 @Composable private fun EstimateInformation(value: EstimateDetail) {
@@ -186,7 +244,8 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
             else value.lines.sortedBy { it.sortOrder }.forEach { line -> Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) { Column(Modifier.weight(1f)) { Text(line.description, fontWeight = FontWeight.Medium); Text("${line.quantity} × ${money(line.unitPrice)}", color = EzBossDesign.Muted, fontSize = 12.sp) }; Text(money(line.total), fontWeight = FontWeight.SemiBold) }; HorizontalDivider() }
         }
         DetailSection("Totals") { TotalRow("Subtotal", value.subtotal); TotalRow("Tax (${value.taxRate}%)", value.tax); HorizontalDivider(); TotalRow("Total", value.total, true) }
-        Text("Editing, sending, payments, and other estimate actions are TODO.", color = EzBossDesign.Muted, fontSize = 12.sp)
+        DetailSection("History") { value.history.forEach { event -> Text(event.changes); Text("${event.actor} · ${event.date}", color = EzBossDesign.Muted, fontSize = 12.sp) } }
+        Text("Use Customer view / checkout to open the current customer link.", color = EzBossDesign.Muted, fontSize = 12.sp)
     }
 }
 
@@ -228,3 +287,120 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
 
 @Composable private fun DetailSection(title: String, content: @Composable ColumnScope.() -> Unit) { Column(Modifier.fillMaxWidth().background(Color.White, EzBossDesign.CardShape).border(1.dp, EzBossDesign.Border, EzBossDesign.CardShape).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp), content = { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp); content() }) }
 @Composable private fun TotalRow(title: String, amount: Double, strong: Boolean = false) { Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.SpaceBetween) { Text(title, fontWeight = if (strong) FontWeight.Bold else FontWeight.Normal); Text(money(amount), fontWeight = if (strong) FontWeight.Bold else FontWeight.Medium) } }
+
+
+@Composable private fun DraftEditorScreen(model: AuthViewModel, id: String?, onClose: () -> Unit, onSaved: (String) -> Unit) {
+    var encoded by rememberSaveable(id) { mutableStateOf(JSONObject().put("creationRequestId", java.util.UUID.randomUUID().toString()).put("customerName", "").put("taxRate", 0).put("lineItems", JSONArray()).toString()) }
+    var ready by rememberSaveable(id) { mutableStateOf(id == null) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var reloadWarning by remember { mutableStateOf(false) }
+    var customersOpen by remember { mutableStateOf(false) }
+    var importingCollection by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    fun load() { scope.launch {
+        busy = true; error = null
+        try { if (id != null) encoded = model.draft(id).toString(); ready = true }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { error = "Could not load draft. Check your access and connection, then retry." }
+        finally { busy = false }
+    } }
+    LaunchedEffect(id) { if (!ready) load() }
+    if(importingCollection){
+        CollectionImportPicker(model,{importingCollection=false}){ imported ->
+            val draft=JSONObject(encoded);val lines=draft.optJSONArray("lineItems") ?: JSONArray()
+            for(i in 0 until imported.length())lines.put(imported.getJSONObject(i))
+            draft.put("lineItems",lines);encoded=draft.toString();importingCollection=false
+        }
+        return
+    }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        TextButton(onClick = onClose, enabled = !busy) { Text("Back to documents") }
+        Text(if (id == null) "Estimate draft" else "Edit document", style = MaterialTheme.typography.headlineSmall)
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        if (busy) CircularProgressIndicator()
+        if (ready) {
+            val draft = JSONObject(encoded)
+            fun field(key: String, value: String) { draft.put(key, value); encoded = draft.toString() }
+            TextButton(onClick = { customersOpen = true }, enabled = !busy) { Text("Select saved client or contact") }
+            OutlinedTextField(draft.optString("customerName"), { field("customerName", it) }, label = { Text("Customer name") }, enabled = !busy)
+            OutlinedTextField(draft.optString("customerEmail", ""), { field("customerEmail", it) }, label = { Text("Email (optional)") }, enabled = !busy)
+            OutlinedTextField(draft.optString("projectDescription", ""), { field("projectDescription", it) }, label = { Text("Scope description") }, enabled = !busy)
+            OutlinedTextField(draft.opt("taxRate").toString(), { field("taxRate", it) }, label = { Text("Tax percent") }, enabled = !busy)
+            val lines = draft.optJSONArray("lineItems") ?: JSONArray()
+            for (i in 0 until lines.length()) {
+                val line = lines.getJSONObject(i)
+                listOf("description" to "Description", "quantity" to "Quantity", "unitPrice" to "Unit price").forEach { (key, title) ->
+                    OutlinedTextField(line.opt(key)?.toString() ?: "", { line.put(key, it); encoded = draft.toString() }, label = { Text(title) }, enabled = !busy)
+                }
+                TextButton(onClick = { lines.remove(i); encoded = draft.toString() }, enabled = !busy) { Text("Remove line") }
+            }
+            TextButton(onClick = { lines.put(JSONObject().put("description","Discount / surcharge").put("type","custom").put("quantity",1).put("unitPrice",0).put("adjustmentKind","group")); draft.put("lineItems",lines); encoded=draft.toString() }, enabled=!busy) { Text("Add discount / surcharge (negative for discount)") }
+            TextButton(onClick = { importingCollection = true }, enabled = !busy) { Text("Import collection") }
+            TextButton(onClick = { lines.put(JSONObject().put("description", "").put("quantity", 1).put("unitPrice", 0).put("type", "manual")); draft.put("lineItems", lines); encoded = draft.toString() }, enabled = !busy) { Text("Add manual line") }
+            Button(onClick = { scope.launch {
+                busy = true; error = null
+                try { val saved = model.saveDraft(JSONObject(encoded)); encoded = saved.toString(); onSaved(saved.get("id").toString()) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (e: ApiException) { error = e.message }
+                catch (e: IllegalArgumentException) { error = e.message }
+                catch (e: Exception) { error = "Save was not confirmed. Edits are preserved. Reopen before retrying an uncertain create." }
+                finally { busy = false }
+            } }, enabled = !busy) { Text("Save document") }
+        }
+        if (id != null) TextButton(onClick = { reloadWarning = true }, enabled = !busy) { Text("Reload stored draft") }
+    }
+    if (customersOpen) CustomerPickerDialog(model, onClose = { customersOpen = false }) { customer, contact ->
+        val draft = JSONObject(encoded)
+        draft.put("customerId", customer.get("id").toString()).put("clientSnapshot", customer)
+            .put("customerName", customer.optString("name", customer.optString("companyName")))
+            .put("customerEmail", contact?.optString("email") ?: customer.optString("email", ""))
+            .put("customerPhone", contact?.optString("phone") ?: customer.optString("phoneMobile", ""))
+        listOf("serviceAddress", "serviceAddress2", "serviceCity", "serviceState", "serviceZipCode").forEach { field ->
+            draft.put(field, customer.opt(if (customer.optBoolean("billingEqualToService", true)) field.replace("service", "billing") else field))
+        }
+        encoded = draft.toString(); customersOpen = false
+    }
+    if (reloadWarning) AlertDialog(onDismissRequest = { reloadWarning = false }, title = { Text("Discard local edits?") }, confirmButton = { TextButton(onClick = { reloadWarning = false; load() }) { Text("Discard and reload") } }, dismissButton = { TextButton(onClick = { reloadWarning = false }) { Text("Keep editing") } })
+}
+
+
+@Composable private fun CustomerPickerDialog(model: AuthViewModel, onClose: () -> Unit, select: (JSONObject, JSONObject?) -> Unit) {
+    var search by remember { mutableStateOf("") }
+    var rows by remember { mutableStateOf(emptyList<JSONObject>()) }
+    var more by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    fun load(reset: Boolean) { scope.launch {
+        busy = true; error = null
+        if (reset) { rows = emptyList(); more = false }
+        try {
+            val page = model.dashboardData("clients?searchTerm=${java.net.URLEncoder.encode(search, "UTF-8")}&pageSize=50&offset=${rows.size}") as JSONObject
+            val data = page.getJSONArray("clients")
+            rows = rows + (0 until data.length()).map { data.getJSONObject(it) }.filter { next -> rows.none { it.get("id") == next.get("id") } }
+            more = page.optBoolean("hasMore")
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { error = "Clients could not be loaded. Check access and connection, then retry." }
+        finally { busy = false }
+    } }
+    LaunchedEffect(Unit) { load(true) }
+    AlertDialog(onDismissRequest = onClose, title = { Text("Select client") }, text = {
+        Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
+            OutlinedTextField(search, { search = it }, label = { Text("Client name") }, enabled = !busy)
+            TextButton(onClick = { load(true) }, enabled = !busy) { Text("Search / retry") }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            if (busy) CircularProgressIndicator()
+            rows.forEach { customer ->
+                val name = customer.optString("name", "Customer")
+                TextButton(onClick = { select(customer, null) }) { Text(name) }
+                val contacts = customer.optJSONArray("additionalContacts") ?: JSONArray()
+                for (i in 0 until contacts.length()) {
+                    val contact = contacts.getJSONObject(i)
+                    TextButton(onClick = { select(customer, contact) }) { Text("$name — ${contact.optString("name", "Contact")}") }
+                }
+            }
+            if (more) TextButton(onClick = { load(false) }, enabled = !busy) { Text("Load more") }
+        }
+    }, confirmButton = { TextButton(onClick = onClose) { Text("Close") } })
+}

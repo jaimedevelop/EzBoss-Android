@@ -102,3 +102,15 @@ values are not shown in errors; credential descriptions are redacted.
 Run `./gradlew --offline --no-daemon --max-workers=2 :app:assembleDebug :app:testDebugUnitTest`
 with the documented compatible JDK, then `python3 scripts/check-config.py`.
 See `../docs/launch/OCTOBER_28_NATIVE_SESSION.md` for evidence and outstanding live acceptance.
+
+### Isolated staging build
+
+The separate Railway API is `https://api-staging-7b72.up.railway.app` with Auth0
+audience `https://api-staging.ezboss.pro`. Build with
+`-PstagingBuild=true -PstagingAuth0ClientId=YOUR_STAGING_NATIVE_CLIENT_ID`.
+This installs as `pro.ezboss.mobile.staging`, labelled **EzBoss Staging**, alongside
+the existing demo app. The staging client ID is mandatory; there is no fallback
+to the demo Native client. The existing public Auth0 domain is reused, with a
+separate staging application/audience and callback:
+`pro.ezboss.mobile.staging://AUTH0_DOMAIN/android/pro.ezboss.mobile.staging/callback`.
+Live Auth0/device acceptance remains pending the new client configuration.

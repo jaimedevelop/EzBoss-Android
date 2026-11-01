@@ -1,0 +1,3 @@
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="task_photos" path="task-photos/" />
+</paths>

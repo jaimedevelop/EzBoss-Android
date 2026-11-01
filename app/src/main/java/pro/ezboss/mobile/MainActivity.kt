@@ -64,6 +64,8 @@ private val appDestinations = listOf(
     AppDestination("Collections", "collections"),
     AppDestination("Work Orders", "work-orders"),
     AppDestination("Purchasing", "purchasing"),
+    AppDestination("Projects", "projects"),
+    AppDestination("Finance", "finance"),
     AppDestination("People", "people"),
     AppDestination("Settings", "settings"),
 )
@@ -90,12 +92,33 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     var state by mutableStateOf<AuthState>(AuthState.Loading); private set
     var busy by mutableStateOf(false); private set
     private val sessionEpoch = SessionEpoch()
-
-    fun revalidate() {
-        if (!busy && state is AuthState.Authenticated) restore()
+    var memberships by mutableStateOf<List<pro.ezboss.mobile.data.CompanyMembership>>(emptyList()); private set
+    var membership by mutableStateOf<String?>(null); private set
+    private fun company(): String = membership ?: throw ApiException(409, "Select a company to continue.")
+    fun selectCompany(id: String) = viewModelScope.launch {
+        if (busy || memberships.none { it.id == id && it.available }) return@launch
+        val account = when (val current = state) {
+            is AuthState.Authenticated -> current.account
+            is AuthState.CompanySelection -> current.account
+            else -> return@launch
+        }
+        busy = true; sessionEpoch.advance(); membership = null; state = AuthState.Loading
+        try {
+            val result = api.companies(auth.accessToken(), id)
+            memberships = result.memberships; membership = result.selected
+            state = if (membership == null) AuthState.CompanySelection(account) else AuthState.Authenticated(account)
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { state = AuthState.Error("Company access could not be loaded. Retry account access.") }
+        finally { busy = false }
     }
 
-    private suspend fun <T> authenticatedRequest(request: suspend (String) -> T): T {
+    fun revalidate() {
+        if (!busy && (state is AuthState.Authenticated || state is AuthState.CompanySelection)) restore()
+    }
+
+    private suspend fun <T> authenticatedRequest(accountOnly: Boolean = false, request: suspend (String) -> T): T {
+        if (state !is AuthState.Authenticated && !(accountOnly && state is AuthState.CompanySelection)) throw ApiException(401, "Sign in required.")
+        if (busy) throw ApiException(409, "Account access is being checked. Retry shortly.")
         val epoch = sessionEpoch.current
         val token = try { auth.accessToken() }
         catch (e: CancellationException) { throw e }
@@ -123,15 +146,25 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
             throw e
         }
     }
-    suspend fun estimatePage(customer: String, estimateState: String?, clientState: String?, offset: Int) = authenticatedRequest { api.estimates(it, customer, estimateState, clientState, offset) }
-    suspend fun dashboardData(path: String) = authenticatedRequest { api.dashboardData(it, path) }
-    suspend fun estimate(id: String) = authenticatedRequest { api.estimate(it, id) }
+    suspend fun estimatePage(customer: String, estimateState: String?, clientState: String?, offset: Int) = authenticatedRequest { api.estimates(it, company(), customer, estimateState, clientState, offset) }
+    suspend fun dashboardData(path: String) = authenticatedRequest { api.dashboardData(it, path, company()) }
+    suspend fun documentAction(id: String, action: String, body: org.json.JSONObject = org.json.JSONObject()) = authenticatedRequest { api.documentAction(it, company(), id, action, body) }
+    suspend fun accountOperation(path: String, method: String = "GET", body: org.json.JSONObject? = null): Any {
+        require(path in listOf("account/lifecycle","account/deletion-requests","account/terms-acceptance") || Regex("account/deletion-requests/[a-fA-F0-9-]{36}/cancel").matches(path))
+        return authenticatedRequest(accountOnly = true) { api.operation(it, "", path, method, body) }
+    }
+    suspend fun operation(path: String, method: String = "GET", body: org.json.JSONObject? = null, providerKey: String? = null) = authenticatedRequest { api.operation(it, company(), path, method, body, providerKey) }
+    suspend fun customCollection(endpoint: String,key: String,model: String,prompt: String,inventory: org.json.JSONObject) = authenticatedRequest { api.customCollection(endpoint,key,model,prompt,inventory) }
+    suspend fun taskPhoto(path: String, jpeg: ByteArray, requestId: String) = authenticatedRequest { api.taskPhoto(it, company(), path, jpeg, requestId) }
+    suspend fun draft(id: String) = authenticatedRequest { api.draft(it, company(), id) }
+    suspend fun saveDraft(draft: org.json.JSONObject) = authenticatedRequest { api.saveDraft(it, company(), draft) }
+    suspend fun estimate(id: String) = authenticatedRequest { api.estimate(it, id, company()) }
 
     fun restore() = viewModelScope.launch {
         if (busy) return@launch
         busy = true
         sessionEpoch.advance()
-        state = AuthState.Loading
+        if (state !is AuthState.Authenticated) state = AuthState.Loading
         try { auth.restore()?.let { initialize(it.accessToken) } ?: run { state = AuthState.SignedOut } }
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { state = AuthState.Error("Sign in is not configured. Please contact your administrator.", retryLogin = true) }
@@ -153,7 +186,13 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     }
 
     private suspend fun initialize(token: String) {
-        try { state = AuthState.Authenticated(api.currentUser(token)) }
+        try {
+            val selected = if (state is AuthState.Authenticated) membership else null
+            val account = api.currentUser(token)
+            val companies = api.companies(token, selected)
+            memberships = companies.memberships; membership = companies.selected
+            state = if (membership == null) AuthState.CompanySelection(account) else AuthState.Authenticated(account)
+        }
         catch (e: ApiException) {
             if (e.statusCode == 401 || e.statusCode == 403) {
                 auth.clearCredentials()
@@ -194,6 +233,8 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
 
 @Composable private fun EzBossApp(model: AuthViewModel, activity: ComponentActivity) {
     var drawerOpen by remember { mutableStateOf(false) }
+    var accountRequests by remember { mutableStateOf(false) }
+    LaunchedEffect(model.state) { if(model.state !is AuthState.CompanySelection)accountRequests=false }
     var protectedSession by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) { model.restore() }
     BackHandler(enabled = drawerOpen) { drawerOpen = false }
@@ -209,7 +250,14 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                     else model.retry()
                 }
             }
-            is AuthState.Authenticated -> key(protectedSession) {
+            is AuthState.CompanySelection -> if(accountRequests) AccountLifecycleScreen(model) { accountRequests=false } else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
+                Text("Select a company", style = MaterialTheme.typography.headlineMedium)
+                TextButton(onClick={accountRequests=true}){Text("Account requests and terms")}
+                if (model.memberships.isEmpty()) Text("No company is linked. Contact your administrator.")
+                model.memberships.forEach { company -> Button(onClick = { model.selectCompany(company.id) }, enabled = company.available && !model.busy) { Text(company.name) } }
+                Button(onClick = { model.signOut(activity) }) { Text("Sign out") }
+            }
+            is AuthState.Authenticated -> key(protectedSession, model.membership) {
         AuthenticatedShell(current.account, model, drawerOpen, { drawerOpen = true }, { drawerOpen = false }, model.busy) {
                     drawerOpen = false
                     protectedSession++
@@ -270,6 +318,9 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                         }
                     }
                 }
+                model.memberships.filter { it.available }.forEach { company ->
+                    TextButton(onClick = { onDismiss(); model.selectCompany(company.id) }, enabled = !busy && company.id != model.membership) { Text(company.name) }
+                }
                 HorizontalDivider(color = EzBossDesign.NavySurface); Spacer(Modifier.height(12.dp))
                 TextButton(onClick = onSignOut, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFFFB49B))) {
                     Text(if (busy) "Signing out…" else "Sign Out", fontWeight = FontWeight.SemiBold)
@@ -304,6 +355,10 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
             composable(if (destination.route == "estimates") "estimates?type={type}" else destination.route, arguments = if (destination.route == "estimates") listOf(navArgument("type") { type = NavType.StringType; defaultValue = "all" }) else emptyList()) { entry ->
                 if (destination.route == "dashboard") DashboardScreen(account, model, { navController.navigate("estimates/$it") }, { navController.navigate(it) { launchSingleTop = true } })
                 else if (destination.route == "estimates") EstimatesListScreen(model, when(entry.arguments?.getString("type")) { "estimate" -> "Estimate"; "invoice" -> "Invoice"; else -> "All" }) { id -> navController.navigate("estimates/$id") }
+                else if (destination.route in listOf("inventory", "collections", "work-orders", "purchasing")) OperationsScreen(model, destination.route)
+                else if (destination.route in listOf("projects","finance")) BusinessRecordsScreen(model,destination.route)
+                else if (destination.route == "people") PeopleSettingsScreen(model, false)
+                else if (destination.route == "settings") PeopleSettingsScreen(model, true)
                 else PlaceholderDestination(destination.title)
             }
         }

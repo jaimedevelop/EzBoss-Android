@@ -13,14 +13,20 @@ val localAuthProperties = Properties().apply {
     val localFile = rootProject.file("local.properties")
     if (localFile.isFile) localFile.inputStream().use { load(it) }
 }
+val stagingBuild = providers.gradleProperty("stagingBuild").orNull == "true"
 val authPropertyNames = listOf("auth0Domain", "auth0ClientId", "auth0Audience", "apiBaseUrl")
 val authProperties = authPropertyNames.associateWith { name ->
-    (providers.gradleProperty(name).orNull ?: localAuthProperties.getProperty(name).orEmpty()).trim()
+    (if (stagingBuild) when (name) {
+        "auth0ClientId" -> providers.gradleProperty("stagingAuth0ClientId").orNull.orEmpty()
+        "auth0Audience" -> "https://api-staging.ezboss.pro"
+        "apiBaseUrl" -> "https://api-staging-7b72.up.railway.app"
+        else -> providers.gradleProperty(name).orNull ?: localAuthProperties.getProperty(name).orEmpty()
+    } else providers.gradleProperty(name).orNull ?: localAuthProperties.getProperty(name).orEmpty()).trim()
 }
 fun authProperty(name: String) = authProperties.getValue(name)
 fun quoted(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
-val nativeApplicationId = "pro.ezboss.mobile"
+val nativeApplicationId = if (stagingBuild) "pro.ezboss.mobile.staging" else "pro.ezboss.mobile"
 val forbiddenAuthProperties = listOf("auth0ClientSecret", "AUTH0_CLIENT_SECRET", "auth0ManagementClientSecret", "AUTH0_MANAGEMENT_CLIENT_SECRET")
 
 val validateAuthConfiguration = tasks.register("validateAuthConfiguration") {
@@ -67,6 +73,7 @@ android {
         buildConfigField("String", "AUTH0_CLIENT_ID", quoted(authProperty("auth0ClientId")))
         buildConfigField("String", "AUTH0_AUDIENCE", quoted(authProperty("auth0Audience")))
         buildConfigField("String", "API_BASE_URL", quoted(authProperty("apiBaseUrl")))
+        manifestPlaceholders["appLabel"] = if (stagingBuild) "EzBoss Staging" else "EzBoss"
         manifestPlaceholders["auth0Domain"] = authProperty("auth0Domain")
         // Keep this in sync with the Native application's Auth0 callback URL.
         manifestPlaceholders["auth0Scheme"] = nativeApplicationId
