@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import pro.ezboss.mobile.ui.theme.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -42,13 +43,13 @@ private val addressKeys=listOf("address","address2","city","state","zipCode")
         clientId=row.optString("clientId","");status=row.optString("status","planning")
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        Text(if(project)"Projects" else "Finance",style=MaterialTheme.typography.headlineMedium)
+        PageHeading(if(project) "Projects" else "Finances", if(project) "Projects, clients and progress" else "Records and linked payment summaries")
         if(busy)CircularProgressIndicator()
         error?.let{Text(it,color=MaterialTheme.colorScheme.error)};message?.let{Text(it)}
         if(selected==null) {
             TextButton(onClick={reload++},enabled=!busy){Text("Refresh / retry")}
             Button(onClick={edit(if(project)JSONObject() else JSONObject().put("id",UUID.randomUUID().toString()).put("data",JSONObject()))},enabled=!busy){Text("Create "+if(project)"project" else "manual record")}
-            rows.forEach {row->OutlinedButton(onClick={edit(row)},modifier=Modifier.fillMaxWidth()){Text(if(project)row.optString("name") else (row.optJSONObject("data")?.optString("invoice")?.takeIf{it.isNotBlank()} ?: row.optString("id")))}}
+            rows.forEach { row -> WorkspaceRecord(if(project) row.optString("name") else (row.optJSONObject("data")?.optString("invoice")?.takeIf { it.isNotBlank() } ?: row.optString("id")), row.optString("status", "")) { edit(row) } }
             if(rows.isEmpty() && !busy && error==null)Text("No records in this company.")
         } else {
             val row=selected!!

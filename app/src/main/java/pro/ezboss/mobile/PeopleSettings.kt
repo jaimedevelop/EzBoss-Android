@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import pro.ezboss.mobile.ui.theme.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -44,7 +45,7 @@ private fun fieldTitle(key: String) = key.replace(Regex("([a-z])([A-Z])"), "$1 $
         } catch(e:Exception) { error=e.message ?: "Unable to load. Retry." } finally { busy=false }
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        Text(if(settings) "Profile and preferences" else "People",style=MaterialTheme.typography.headlineMedium)
+        PageHeading(if(settings) "Settings" else "People", if(settings) "Profile, company and account preferences" else "Clients, employees and invitations")
         if(settings) Row { TextButton(onClick={path="profile"}){Text("Company profile")};TextButton(onClick={path="account/employee-profile"}){Text("My employee profile")} }
         if(settings) TextButton(onClick={lifecycle=true}){Text("Account requests and terms")}
         if(!settings) TextButton(onClick={invitations=true}){Text("Company invitations")}
@@ -77,7 +78,7 @@ private fun fieldTitle(key: String) = key.replace(Regex("([a-z])([A-Z])"), "$1 $
                 Button(onClick={editing=JSONObject();values=emptyMap();message=null},enabled=!busy){Text("Create "+if(path=="clients") "client" else "employee")}
                 OutlinedTextField(search,{search=it},label={Text("Search")},modifier=Modifier.fillMaxWidth())
                 rows.filter{it.optString("name").contains(search,true)}.forEach { row ->
-                    OutlinedButton(onClick={editing=row;values=fields.associateWith { row.optString(it).takeUnless{v->v=="null"}.orEmpty() };message=null},modifier=Modifier.fillMaxWidth()){Text(row.optString("name"))}
+                    WorkspaceRecord(row.optString("name"), row.optString("email", "")) { editing=row;values=fields.associateWith { row.optString(it).takeUnless{v->v=="null"}.orEmpty() };message=null }
                 }
                 if(rows.isEmpty() && !busy && error==null)Text("No people in this company.")
             }

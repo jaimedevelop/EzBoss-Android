@@ -32,7 +32,13 @@ object EzBossDesign {
     val Gap = 12.dp
     val CardShape = RoundedCornerShape(12.dp)
     val ControlShape = RoundedCornerShape(8.dp)
-    val HeaderBrush = Brush.horizontalGradient(listOf(OrangeBright, Orange))
+    val HeaderBrush = Brush.horizontalGradient(listOf(OrangeDark, Color(0xFF9A3412)))
+    fun categoryColor(category: String): Color = when (category) {
+        "labor" -> Color(0xFF7E22CE)
+        "tools" -> Color(0xFF1D4ED8)
+        "equipment" -> Color(0xFF15803D)
+        else -> OrangeDark
+    }
 }
 
 private val AppTypography = Typography(
@@ -81,5 +87,30 @@ private val AppTypography = Typography(
     }
     Surface(color = background, contentColor = foreground, shape = RoundedCornerShape(50)) {
         Text(text, Modifier.padding(horizontal = 10.dp, vertical = 4.dp), style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+/** A readable phone record replaces desktop table columns. */
+@Composable fun WorkspaceRecord(title: String, status: String = "", onClick: () -> Unit) {
+    Surface(onClick = onClick, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
+        shape = EzBossDesign.CardShape, color = Color.White,
+        border = androidx.compose.foundation.BorderStroke(1.dp, EzBossDesign.Border)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            if (status.isNotBlank() && status != "null") StatusBadge(status.replace('_', ' '), status)
+        }
+    }
+}
+
+@Composable fun WorkspaceTile(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector,
+    modifier: Modifier = Modifier, category: String = "", onClick: () -> Unit) {
+    val accent = EzBossDesign.categoryColor(category)
+    val tileModifier = if (androidx.compose.ui.platform.LocalDensity.current.fontScale <= 1.3f) modifier.aspectRatio(1f) else modifier
+    Surface(onClick = onClick, modifier = tileModifier, shape = EzBossDesign.CardShape, color = accent, contentColor = Color.White) {
+        Column(Modifier.fillMaxWidth().heightIn(min = 160.dp).background(Brush.linearGradient(listOf(accent, accent.copy(alpha = .92f)))).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(28.dp))
+            Text(title, style = MaterialTheme.typography.titleLarge)
+        }
     }
 }

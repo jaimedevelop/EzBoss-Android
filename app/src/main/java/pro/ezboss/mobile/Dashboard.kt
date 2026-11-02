@@ -7,6 +7,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Business
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -33,7 +38,7 @@ internal fun dashboardDate(value: String, zone: ZoneId): LocalDate? = runCatchin
     if (value.length == 10) LocalDate.parse(value) else OffsetDateTime.parse(value).atZoneSameInstant(zone).toLocalDate()
 }.getOrNull()
 
-@Composable fun DashboardScreen(account: Account, model: AuthViewModel, openDocument: (String) -> Unit, navigate: (String) -> Unit) {
+@Composable fun DashboardScreen(account: Account, model: AuthViewModel, openDocument: (String) -> Unit, navigate: (String) -> Unit, canOpen: (String) -> Boolean = { true }) {
     var refresh by rememberSaveable { mutableIntStateOf(0) }
     var days by rememberSaveable { mutableStateOf("Last 7 days") }
     var clients by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
@@ -58,15 +63,25 @@ internal fun dashboardDate(value: String, zone: ZoneId): LocalDate? = runCatchin
     var today by remember { mutableStateOf(LocalDate.now(zone)) }
     LaunchedEffect(zone) { today = LocalDate.now(zone); while (true) { kotlinx.coroutines.delay(30_000); today = LocalDate.now(zone) } }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Column(Modifier.fillMaxWidth().background(EzBossDesign.HeaderBrush).padding(start = 84.dp, top = 24.dp, end = 16.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.fillMaxWidth().background(EzBossDesign.HeaderBrush).padding(start = 16.dp, top = 24.dp, end = 16.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Welcome back, ${dashboardGreetingName(profile?.opt("firstName"), account.displayName)}!", color = Color.White, style = MaterialTheme.typography.headlineMedium)
             Text("Here's what's happening with your business today.", color = Color.White)
             Text(today.format(DateTimeFormatter.ofPattern("EEEE, MMM d")), color = Color.White)
         }
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            listOf(
+                Triple("Estimates", "estimates", Icons.Outlined.Description),
+                Triple("Projects", "projects", Icons.Outlined.Business),
+                Triple("Work Orders", "work-orders", Icons.Outlined.Checklist),
+                Triple("Finances", "finance", Icons.Outlined.AccountBalanceWallet),
+            ).filter { canOpen(it.second) }.chunked(if (androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.3f) 1 else 2).forEach { group ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    group.forEach { (title, route, icon) -> WorkspaceTile(title, icon, Modifier.weight(1f)) { navigate(route) } }
+                }
+            }
             TextButton(onClick = { refresh++ }) { Text("Refresh dashboard") }
             if (profileError) Text("Business preferences unavailable. Using device timezone and USD.", style = MaterialTheme.typography.bodySmall)
-            DashboardCard("Estimates & Invoices") {
+            if (canOpen("estimates")) DashboardCard("Estimates & Invoices") {
                 if (clientsUnavailable) Text("Billing addresses unavailable: linked client data could not be accessed.", style = MaterialTheme.typography.bodySmall)
                 PeriodPicker(days, listOf("Last 7 days", "Last 30 days", "Last 90 days")) { days = it }
                 DashboardRequest(model, "estimates", refresh) { response ->
@@ -102,11 +117,13 @@ internal fun dashboardDate(value: String, zone: ZoneId): LocalDate? = runCatchin
                     }
                 }
             }
-            ScheduleCard(model, refresh, navigate)
-            Text("Accounting", style = MaterialTheme.typography.titleLarge)
-            AccountingCard("Pending Accounts", "pending", model, refresh, zone, openDocument)
-            AccountingCard("Your Accumulated", "accumulated", model, refresh, zone, openDocument)
-            PersonnelCard(model, refresh)
+            if (canOpen("work-orders")) ScheduleCard(model, refresh, navigate)
+            if (canOpen("finance")) {
+                Text("Accounting", style = MaterialTheme.typography.titleLarge)
+                AccountingCard("Pending Accounts", "pending", model, refresh, zone, openDocument)
+                AccountingCard("Your Accumulated", "accumulated", model, refresh, zone, openDocument)
+            }
+            if (canOpen("employees")) PersonnelCard(model, refresh)
         }
     }
 }
@@ -126,7 +143,17 @@ internal fun dashboardBalance(invoice: JSONObject, rows: List<JSONObject>): java
 
 @Composable private fun DashboardCard(title: String, content: @Composable ColumnScope.() -> Unit) {
     Surface(shape = EzBossDesign.CardShape, color = Color.White, border = androidx.compose.foundation.BorderStroke(1.dp, EzBossDesign.Border), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { Text(title, style = MaterialTheme.typography.titleLarge); content() }
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (title == "Personnel") {
+                Box(Modifier.fillMaxWidth().background(EzBossDesign.HeaderBrush).padding(12.dp)) { Text(title, color = Color.White, style = MaterialTheme.typography.titleLarge) }
+            } else Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (title in listOf("Schedule / Work Orders", "Pending Accounts", "Your Accumulated")) {
+                    Column { repeat(4) { Box(Modifier.size(4.dp, 4.dp).background(if (it % 2 == 0) EzBossDesign.Orange else Color.White)) } }
+                }
+                Text(title, style = MaterialTheme.typography.titleLarge)
+            }
+            content()
+        }
     }
 }
 @Composable private fun PeriodPicker(value: String, values: List<String> = listOf("Daily", "Weekly", "Monthly"), onChange: (String) -> Unit) {

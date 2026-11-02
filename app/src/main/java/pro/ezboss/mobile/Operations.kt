@@ -6,6 +6,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import pro.ezboss.mobile.ui.theme.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.People
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.LocalShipping
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -27,8 +33,8 @@ private fun JSONObject.identifier(): String = optString("id").takeIf { it.isNotB
 private fun JSONObject.rows(key: String) = optJSONArray(key)?.let { array -> (0 until array.length()).map { array.getJSONObject(it) } } ?: emptyList()
 
 @Composable
-fun OperationsScreen(model: AuthViewModel, destination: String) {
-    var kind by remember(destination) { mutableStateOf(if (destination == "inventory") "products" else destination) }
+fun OperationsScreen(model: AuthViewModel, destination: String, canOpen: (String) -> Boolean = { true }) {
+    var kind by remember(destination) { mutableStateOf(if (destination == "inventory") listOf("products", "labor", "tools", "equipment").firstOrNull { canOpen("inventory-$it") } ?: "products" else destination) }
     val path = when { destination == "inventory" -> "inventory/$kind"; kind == "assigned" -> "employee/work-orders"; destination == "purchasing" -> "purchase-orders"; else -> destination }
     var rows by remember(path) { mutableStateOf<List<JSONObject>>(emptyList()) }
     var selected by remember(path) { mutableStateOf<String?>(null) }
@@ -45,8 +51,24 @@ fun OperationsScreen(model: AuthViewModel, destination: String) {
         try { val next = operationRows(model.operation(path+(if(path=="purchase-orders") "?limit=25&offset=${page*25}" else ""))); rows = if(page==0) next else (rows+next).distinctBy{it.identifier()}; more=path=="purchase-orders"&&next.size==25 } catch (e: Exception) { rows=emptyList();more=false;error = e.message ?: "Could not load. Retry." } finally { busy = false }
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(destination.replace('-', ' ').replaceFirstChar { it.uppercase() },style=MaterialTheme.typography.headlineMedium)
-        if (destination == "inventory") Column { listOf("products","labor","tools","equipment").chunked(2).forEach { group -> Row { group.forEach { value -> TextButton(onClick={ kind = value }) { Text(value) } } } } }
+        PageHeading(destination.replace('-', ' ').replaceFirstChar { it.uppercase() }, when(destination) {
+            "inventory" -> "Materials, labor, tools and rentals"
+            "collections" -> "Reusable scopes and item libraries"
+            "purchasing" -> "Purchase orders and receiving"
+            else -> "Jobs, tasks and scheduling"
+        })
+        if (destination == "inventory" && selected == null && !creating) {
+            listOf("products", "labor", "tools", "equipment").filter { canOpen("inventory-$it") }.chunked(if (androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.3f) 1 else 2).forEach { group ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    group.forEach { value ->
+                        WorkspaceTile(if(value == "equipment") "Equipment & Rentals" else value.replaceFirstChar { it.uppercase() },
+                            when(value) { "labor" -> Icons.Outlined.People; "tools" -> Icons.Outlined.Build; "equipment" -> Icons.Outlined.LocalShipping; else -> Icons.Outlined.Inventory2 },
+                            Modifier.weight(1f), value) { kind = value }
+                    }
+                }
+            }
+            Text(kind.replaceFirstChar { it.uppercase() }, color = EzBossDesign.categoryColor(kind), style = MaterialTheme.typography.titleLarge)
+        }
         if (destination == "work-orders") Row { TextButton(onClick={kind="work-orders"}) { Text("Manage jobs") }; TextButton(onClick={kind="assigned"}) { Text("My assigned jobs") } }
         if(destination=="collections")TextButton(onClick={aiOpen=true}){Text("AI collection assistant")}
         when {
@@ -62,7 +84,7 @@ fun OperationsScreen(model: AuthViewModel, destination: String) {
                 if (rows.isEmpty() && !busy && error == null) Text("No items in this company.")
                 if(more)TextButton(onClick={page++},enabled=!busy){Text("Load more")}
                 rows.filter { it.label().contains(search,ignoreCase=true) }.forEach { row ->
-                    OutlinedButton(onClick={selected=row.identifier()},modifier=Modifier.fillMaxWidth()) { Text(row.label()+"  "+row.optString("status","")) }
+                    WorkspaceRecord(row.label(), row.optString("status", "")) { selected = row.identifier() }
                 }
             }
         }

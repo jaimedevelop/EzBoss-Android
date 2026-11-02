@@ -28,6 +28,20 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Dashboard
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Business
+import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.CollectionsBookmark
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.ShoppingCart
+import androidx.compose.material.icons.outlined.People
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.runtime.*
 import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
@@ -36,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -60,12 +75,12 @@ private data class AppDestination(val title: String, val route: String)
 private val appDestinations = listOf(
     AppDestination("Dashboard", "dashboard"),
     AppDestination("Estimates", "estimates"),
+    AppDestination("Projects", "projects"),
     AppDestination("Inventory", "inventory"),
     AppDestination("Collections", "collections"),
     AppDestination("Work Orders", "work-orders"),
+    AppDestination("Finances", "finance"),
     AppDestination("Purchasing", "purchasing"),
-    AppDestination("Projects", "projects"),
-    AppDestination("Finance", "finance"),
     AppDestination("People", "people"),
     AppDestination("Settings", "settings"),
 )
@@ -288,6 +303,31 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
 
 @Composable private fun AuthenticatedShell(account: Account, model: AuthViewModel, open: Boolean, onOpen: () -> Unit, onDismiss: () -> Unit, busy: Boolean, onSignOut: () -> Unit) {
     val navController = rememberNavController()
+    var allowedPages by remember(model.membership) { mutableStateOf<Set<String>?>(null) }
+    var accessError by remember(model.membership) { mutableStateOf(false) }
+    var accessRetry by remember { mutableIntStateOf(0) }
+    LaunchedEffect(model.membership, accessRetry) {
+        allowedPages = null; accessError = false
+        try {
+            val result = model.operation("account/me?membershipId=${model.membership}") as org.json.JSONObject
+            val effective = result.getJSONObject("effectivePermissions")
+            val pages = effective.getJSONObject("pages")
+            val capabilities = effective.getJSONObject("capabilities")
+            allowedPages = pages.keys().asSequence().filter { pages.getJSONObject(it).optBoolean("allowed") }.toSet().filter { key ->
+                key !in listOf("inventory", "collections", "purchasing") || capabilities.optJSONObject("read:$key")?.optBoolean("allowed") == true
+            }.toSet().let { allowed ->
+                if (listOf("inventory-products", "inventory-tools", "inventory-equipment").all { it in allowed } && capabilities.optJSONObject("read:inventory")?.optBoolean("allowed") == true) allowed
+                else allowed - "purchasing"
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { accessError = true }
+    }
+    fun canOpen(route: String): Boolean = when(route.substringBefore("?")) {
+        "settings" -> true
+        "people" -> allowedPages.orEmpty().any { it in listOf("clients", "employees") }
+        "finance" -> "finances" in allowedPages.orEmpty()
+        else -> route.substringBefore("?") in allowedPages.orEmpty()
+    }
     val backStack by navController.currentBackStackEntryAsState()
     val selectedRoute = backStack?.destination?.route ?: appDestinations.first().route
     BackHandler(enabled = !open && navController.previousBackStackEntry != null) { navController.popBackStack() }
@@ -300,17 +340,33 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     }) {
         val drawerWidth = minOf(maxWidth * .84f, 340.dp)
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).imePadding()) {
-            AuthenticatedDestinationHost(navController, model, account)
+            Column(Modifier.fillMaxSize()) {
+                Surface(color = Color.White, tonalElevation = 0.dp) {
+                    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (selectedRoute == EstimateDetailRoute) {
+                            IconButton(onClick = { navController.popBackStack() }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back to documents") }
+                        } else {
+                            IconButton(onClick = onOpen) { Icon(Icons.Outlined.Menu, "Open navigation") }
+                        }
+                        Text(model.memberships.firstOrNull { it.id == model.membership }?.name ?: "EzBoss", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+                Box(Modifier.weight(1f)) {
+                    AuthenticatedDestinationHost(navController, model, account, ::canOpen, allowedPages != null, accessError) { accessRetry++ }
+
+                }
+            }
         }
         if (open) {
             Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).background(Color(0x800E1916)).clickable(
                 interactionSource = remember { MutableInteractionSource() }, indication = null, role = Role.Button, onClick = onDismiss,
             ).semantics { contentDescription = "Dismiss navigation drawer" })
             Column(Modifier.align(Alignment.TopStart).windowInsetsPadding(WindowInsets.safeDrawing).width(drawerWidth).fillMaxHeight().imePadding().background(EzBossDesign.Navy).padding(18.dp)) {
+                IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close navigation", tint = Color.White) }
                 ProfileArea(account)
                 Spacer(Modifier.height(20.dp)); HorizontalDivider(color = EzBossDesign.NavySurface)
                 Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).semantics { contentDescription = "Navigation destinations" }) {
-                    appDestinations.forEach { destination ->
+                    appDestinations.filter { canOpen(it.route) }.forEach { destination ->
                         val selected = selectedRoute.substringBefore("?") == destination.route || (destination.route == "estimates" && selectedRoute == EstimateDetailRoute)
                         NavigationDestinationRow(destination.title, selected) {
                             if (!selected) navController.navigate(destination.route) { launchSingleTop = true }
@@ -349,13 +405,19 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     }
 }
 
-@Composable private fun AuthenticatedDestinationHost(navController: NavHostController, model: AuthViewModel, account: Account) {
+@Composable private fun AuthenticatedDestinationHost(navController: NavHostController, model: AuthViewModel, account: Account, canOpen: (String) -> Boolean, accessLoaded: Boolean, accessError: Boolean, retryAccess: () -> Unit) {
     NavHost(navController = navController, startDestination = appDestinations.first().route, modifier = Modifier.fillMaxSize()) {
         appDestinations.forEach { destination ->
             composable(if (destination.route == "estimates") "estimates?type={type}" else destination.route, arguments = if (destination.route == "estimates") listOf(navArgument("type") { type = NavType.StringType; defaultValue = "all" }) else emptyList()) { entry ->
-                if (destination.route == "dashboard") DashboardScreen(account, model, { navController.navigate("estimates/$it") }, { navController.navigate(it) { launchSingleTop = true } })
+                if (!canOpen(destination.route)) {
+                    Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Text(if(accessError) "Workspace access could not be loaded." else if(!accessLoaded) "Loading workspace access…" else "This page is unavailable for your account.")
+                        if(!accessLoaded && !accessError) CircularProgressIndicator() else TextButton(onClick = retryAccess) { Text("Retry workspace access") }
+                    }
+                }
+                else if (destination.route == "dashboard") DashboardScreen(account, model, { navController.navigate("estimates/$it") }, { navController.navigate(it) { launchSingleTop = true } }, canOpen)
                 else if (destination.route == "estimates") EstimatesListScreen(model, when(entry.arguments?.getString("type")) { "estimate" -> "Estimate"; "invoice" -> "Invoice"; else -> "All" }) { id -> navController.navigate("estimates/$id") }
-                else if (destination.route in listOf("inventory", "collections", "work-orders", "purchasing")) OperationsScreen(model, destination.route)
+                else if (destination.route in listOf("inventory", "collections", "work-orders", "purchasing")) OperationsScreen(model, destination.route, canOpen)
                 else if (destination.route in listOf("projects","finance")) BusinessRecordsScreen(model,destination.route)
                 else if (destination.route == "people") PeopleSettingsScreen(model, false)
                 else if (destination.route == "settings") PeopleSettingsScreen(model, true)
@@ -373,10 +435,23 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     val background = if (selected) BrandOrange else Color.Transparent
     TextButton(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).heightIn(min = 48.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).heightIn(min = 48.dp).semantics { this.selected = selected },
         shape = RoundedCornerShape(8.dp),
         colors = ButtonDefaults.textButtonColors(contentColor = Color.White, containerColor = background),
     ) {
+        Icon(when(title) {
+            "Dashboard" -> Icons.Outlined.Dashboard
+            "Estimates" -> Icons.Outlined.Description
+            "Projects" -> Icons.Outlined.Business
+            "Inventory" -> Icons.Outlined.Inventory2
+            "Collections" -> Icons.Outlined.CollectionsBookmark
+            "Work Orders" -> Icons.Outlined.Checklist
+            "Finances" -> Icons.Outlined.AccountBalanceWallet
+            "Purchasing" -> Icons.Outlined.ShoppingCart
+            "People" -> Icons.Outlined.People
+            else -> Icons.Outlined.Settings
+        }, contentDescription = null, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(12.dp))
         Text(title, modifier = Modifier.fillMaxWidth(), style = MaterialTheme.typography.bodyLarge, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
     }
 }

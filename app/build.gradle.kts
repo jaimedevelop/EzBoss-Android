@@ -75,6 +75,9 @@ android {
         buildConfigField("String", "API_BASE_URL", quoted(authProperty("apiBaseUrl")))
         manifestPlaceholders["appLabel"] = if (stagingBuild) "EzBoss Staging" else "EzBoss"
         manifestPlaceholders["auth0Domain"] = authProperty("auth0Domain")
+        manifestPlaceholders["releaseAuth0Audience"] = authProperty("auth0Audience")
+        manifestPlaceholders["releaseApiBaseUrl"] = authProperty("apiBaseUrl")
+        manifestPlaceholders["releaseAuth0ClientId"] = authProperty("auth0ClientId")
         // Keep this in sync with the Native application's Auth0 callback URL.
         manifestPlaceholders["auth0Scheme"] = nativeApplicationId
     }
@@ -101,4 +104,37 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // JVM tests need real JSON behavior; Android's android.jar implementation throws.
     testImplementation("org.json:json:20250517")
+}
+
+// Every release APK packaging path must pass the signed artifact gate. Debug and
+// staging debug builds remain available without a distribution signing identity.
+tasks.matching { it.name == "packageRelease" }.configureEach {
+    doFirst {
+        check(!stagingBuild) { "Distribution release cannot use staging identity." }
+        val releasePolicyProperties = listOf("releaseSigningCertificateSha256", "releaseExpectedAuth0Domain", "releaseExpectedAudience", "releaseExpectedApiOrigin", "releaseExpectedClientId")
+        check(releasePolicyProperties.all { !providers.gradleProperty(it).orNull.isNullOrBlank() }) {
+            "Set the independently approved release signing/identity policy properties: ${releasePolicyProperties.joinToString()}."
+        }
+    }
+    doLast {
+        val apks = layout.buildDirectory.dir("outputs/apk/release").get().asFile.walkTopDown().filter { it.extension == "apk" }.toList()
+        check(apks.isNotEmpty()) { "No release APK was produced for security validation." }
+        apks.forEach { apk ->
+            project.exec {
+                commandLine("python3", rootProject.file("scripts/check-release.py"), apk,
+                    "--package", nativeApplicationId, "--auth0-domain", providers.gradleProperty("releaseExpectedAuth0Domain").get(),
+                    "--certificate-sha256", providers.gradleProperty("releaseSigningCertificateSha256").get(),
+                    "--audience", providers.gradleProperty("releaseExpectedAudience").get(), "--api-origin", providers.gradleProperty("releaseExpectedApiOrigin").get(),
+                    "--client-id", providers.gradleProperty("releaseExpectedClientId").get(),
+                    "--apksigner", android.sdkDirectory.resolve("build-tools/${android.buildToolsVersion}/apksigner"),
+                    "--apkanalyzer", android.sdkDirectory.resolve("cmdline-tools/latest/bin/apkanalyzer"))
+            }
+        }
+    }
+    // Cached/up-to-date package tasks must not bypass validation on a later release.
+    outputs.upToDateWhen { false }
+    outputs.cacheIf { false }
+}
+tasks.matching { it.name == "bundleRelease" }.configureEach {
+    doFirst { error("AAB distribution is not accepted by the signed APK security gate. Use the verified release APK pipeline.") }
 }

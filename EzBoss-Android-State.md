@@ -1,5 +1,42 @@
 # EzBoss Android State
 
+## Seven-gap release enforcement (November 2, 2026)
+
+- `scripts/check-release.py` is the canonical signed-APK policy; root workspace tooling delegates to it. Validation uses unconditional errors even under `python -O`. Checks include an independently approved signing certificate and callback/build identity, backup/debug/test/cleartext policy, exported components and network overrides. Public audience/API/client identity metadata is added to the merged manifest for artifact comparison; no server secret is introduced.
+- `app/build.gradle.kts`: release APK packaging always runs the gate (no up-to-date/build-cache bypass). Required approved public properties: `releaseSigningCertificateSha256`, `releaseExpectedAuth0Domain`, `releaseExpectedAudience`, `releaseExpectedApiOrigin`, `releaseExpectedClientId`. SDK apksigner/apkanalyzer and normal release signing must be configured. AAB distribution is blocked pending an equivalent AAB validation path. Debug behavior is unchanged.
+- Verification: four policy tests pass, including optimized Python rejection and the narrowly permission-protected ProfileInstallReceiver. Cached Gradle 8.13/JDK21 configuration (`help`) passes. No signed APK build, release signing ownership or physical-device acceptance was performed; no emulator/simulator was started. See `../docs/PRELAUNCH_SECURITY_REVIEW_AND_IMPLEMENTATION.md` and seven-gap evidence for shared API/web checks.
+
+## Prelaunch containment implementation (November 2, 2026)
+
+- `EzBoss-Android/` is the canonical Android source/build pipeline. Root `../settings.gradle.kts` now fails configuration deliberately, excluding the divergent root `../app/` scaffold from release builds. No primary Android runtime source changed.
+- Shared API now disables PayPal settlement/capture and estimate attachments pending acceptance; see `../docs/PRELAUNCH_SECURITY_REVIEW_AND_IMPLEMENTATION.md` for rollout and remaining gates.
+- Verification: source/config inspection only; no fresh native assembly, merged release artifact inspection, signing or device acceptance. No emulator/simulator started. TODO: signed merged-manifest gate, PKCE/callback interception, backup/logout/reboot and actual-device acceptance.
+
+
+## Performance analysis (November 2, 2026)
+
+- Reviewed current Android dashboard, operations, business records, selectors, camera preparation and API transport; no runtime/configuration changes made. Existing unrelated changes preserved.
+- Cross-platform findings, proposed benefits, staged implementation and consolidated risks: `../docs/analysis/APP_PERFORMANCE_AND_IMPROVEMENT_ANALYSIS_2026-11-02.md`.
+- Confirmed candidates: eager operational/business list composition, broad selector reads, blocking OkHttp calls without explicit coroutine-to-call cancellation, and synchronous camera decode/compression. Runtime impact remains unmeasured.
+- No fresh Android build/JVM/device run and no simulator/emulator started. Existing 34-test historical evidence is not a new result. TODO: release-like hardware profiling and cancellation/image/list acceptance before implementation rollout.
+
+## Pre-launch security source review (November 2, 2026)
+
+- Reviewed native authentication/credential storage, API redirect policy, manifest/FileProvider and provider-key flows alongside shared web/backend boundaries. No Android runtime or configuration changes were made.
+- Findings and open implementation/acceptance tasks: `../docs/PRELAUNCH_SECURITY_REVIEW_AND_IMPLEMENTATION.md`, especially SEC-11 (root `app/` versus `EzBoss-Android/app/` release-source divergence, merged release manifest and callback/device verification). Custom-scheme interception is a conditional risk; no native account takeover was demonstrated.
+- Shared API TypeScript build passed; 361 backend tests passed, 26 skipped, zero failures using direct Node/tsx invocation. No native build, device security test or emulator/simulator was started for this review. Release signing, effective backup/Keychain policies, PKCE/state/provider configuration and physical-device acceptance remain unverified.
+
+## Firebase removal audit (November 2, 2026)
+
+- Documentation-only audit: no direct Firebase SDK, Google Services configuration, FCM or Crashlytics integration found in the primary Android source/dependency declarations or the separate root `../app/` scaffold. Auth0 and bearer API transport remain the native contract; no runtime behavior/configuration changed.
+- Shared web/API blockers, historical media risks, migration sequence and role handoff: `../docs/architecture/FIREBASE_REMOVAL_AUDIT_AND_HANDOFF.md`. Static source review only; no build, device test or emulator started. Remaining: confirm release-authoritative Android tree and perform native regression acceptance after shared API/data cutover; future push transport remains undecided.
+
+## Web design reference implementation (November 1, 2026)
+
+- `MainActivity.kt`: reserved safe-area hamburger/company bar, native estimate detail Back, explicit drawer close, web destination order, outline icons and selected accessibility semantics. Drawer/root availability loads effective company pages/capabilities from `account/me`; purchasing includes inventory prerequisites. Settings/account recovery remains reachable. Existing edge gesture/backdrop/Back/company switching preserved.
+- `ui/theme/EzBossTheme.kt`: readable darker text-bearing gradients, category accents, shared white record cards and adaptive square shortcut/category tiles. `Dashboard.kt` adds permitted shortcuts and striped schedule/accounting plus gradient personnel identity. `Operations.kt`, `BusinessRecords.kt`, `PeopleSettings.kt` use shared headers and readable white records; inventory category tiles retain orange/purple/blue/green identity. No unsupported web destination was added.
+- Verification: debug assembly and 34 distinct JVM tests passed (zero failures) with cached Gradle 8.13/JDK 21 and fresh `/tmp/ezboss-design-android-output` (existing workspace intermediates contain duplicate dex artifacts). Logs: `/tmp/ezboss-design-android.log`. No emulator started. Device acceptance limits are recorded in the shared design reference; authenticated screenshots, scaling/focus/keyboard, company transitions and live permission results remain pending. Advanced web parity listed below remains open.
+
 ## Weeks 3–4 audit (October 31, 2026)
 
 - No Android runtime source/config changes. Reviewed `Operations.kt`, `BusinessRecords.kt`, people/settings, native API transports, transient custom-provider credentials, photo capture/retry and foreground/session preservation against the November 9–22 blocks.
@@ -195,3 +232,9 @@ Auth0 dashboard setup: create a **Native** application with package `pro.ezboss.
 - `MainActivity.kt` / `auth/AuthState.kt`: company picker, active-company drawer switching, and navigation recreation per selected membership. Switching removes protected content before awaiting discovery; existing session epoch rejects late resource results. Empty companies and unavailable memberships remain explicit; no first-company fallback. Existing document/dashboard screens are preserved.
 - `data/CompanyAccountTest.kt`: four JVM tests cover ambiguity, inactive employee/context and foreign selected context. Offline Gradle 8.13/Java 21 debug assembly passes; 48 JVM tests pass with zero failures/errors/skips. Built configuration check passes. No configuration changes, emulator start, device install or live identity is claimed.
 - Evidence, remaining staging/device gates and next actions: `../docs/launch/OCTOBER_29_NATIVE_DOCUMENTS.md`. Both October 28–29 daily exits remain unaccepted until the physical-device/shared-fixture walkthrough. Existing historical TODOs above remain history; this entry is the current verification status.
+
+## Firebase exit local regression — November 2, 2026
+
+- Canonical `EzBoss-Android` JVM tests passed: **34 tests, zero failures/errors/skips**, using cached Gradle 8.13 and Adoptium JDK 21. Log: `/tmp/ezboss-gap-android-tests.log`. No Android source/configuration changes were made by the Firebase-gap task; unrelated ongoing changes were preserved.
+- The second root scaffold explicitly rejects builds as archived in root `settings.gradle.kts`; it is not an additional supported release target. Its attempted test run stopped at that guard (`/tmp/ezboss-gap-root-android-tests.log`).
+- No emulator/device session or ADB discovery was started. These JVM results do not establish live provider login, customer-file viewing, permissions on hardware or production cutover acceptance. Those remain in the Firebase exit runbook; this task was explicitly limited to local tooling/tests.

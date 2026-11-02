@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <application android:allowBackup="false" android:theme="@style/Theme.EzBoss" android:label="${appLabel}" android:usesCleartextTraffic="false">
+        <meta-data android:name="pro.ezboss.release.AUTH0_AUDIENCE" android:value="${releaseAuth0Audience}" />
+        <meta-data android:name="pro.ezboss.release.API_BASE_URL" android:value="${releaseApiBaseUrl}" />
+        <meta-data android:name="pro.ezboss.release.AUTH0_CLIENT_ID" android:value="${releaseAuth0ClientId}" />
         <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.taskphotos" android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/task_photo_paths" />
         </provider>
