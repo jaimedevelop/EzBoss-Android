@@ -50,7 +50,7 @@ private fun fieldTitle(key: String) = key.replace(Regex("([a-z])([A-Z])"), "$1 $
         if(settings) TextButton(onClick={lifecycle=true}){Text("Account requests and terms")}
         if(!settings) TextButton(onClick={invitations=true}){Text("Company invitations")}
         if(!settings) Row { TextButton(onClick={path="clients"}){Text("Clients")}; TextButton(onClick={path="employees"}){Text("Employees")} }
-        if(busy) CircularProgressIndicator()
+        if(busy) EzBossLoadingIndicator()
         error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
         message?.let { Text(it) }
         if(editing!=null) {
@@ -106,7 +106,7 @@ private fun fieldTitle(key: String) = key.replace(Regex("([a-z])([A-Z])"), "$1 $
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
         TextButton(onClick=back){Text("Back")}
         Text("Account requests and terms",style=MaterialTheme.typography.headlineMedium)
-        if(busy)CircularProgressIndicator()
+        if(busy)EzBossLoadingIndicator()
         error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
         TextButton(onClick={reload++},enabled=!busy){Text("Refresh / retry")}
         val document=data?.optJSONObject("document")
@@ -157,7 +157,7 @@ private fun fieldTitle(key: String) = key.replace(Regex("([a-z])([A-Z])"), "$1 $
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
         TextButton(onClick=back){Text("Back")};Text("Company invitations",style=MaterialTheme.typography.headlineMedium)
-        if(busy)CircularProgressIndicator();error?.let{Text(it,color=MaterialTheme.colorScheme.error)};message?.let{Text(it)}
+        if(busy)EzBossLoadingIndicator();error?.let{Text(it,color=MaterialTheme.colorScheme.error)};message?.let{Text(it)}
         TextButton(onClick={reload++},enabled=!busy){Text("Refresh / retry")}
         OutlinedTextField(email,{email=it},label={Text("Employee email")},modifier=Modifier.fillMaxWidth(),enabled=!busy)
         Text("Position: "+positions.firstOrNull{it.optString("id")==position}?.optString("name").orEmpty())

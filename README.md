@@ -114,3 +114,9 @@ to the demo Native client. The existing public Auth0 domain is reused, with a
 separate staging application/audience and callback:
 `pro.ezboss.mobile.staging://AUTH0_DOMAIN/android/pro.ezboss.mobile.staging/callback`.
 Live Auth0/device acceptance remains pending the new client configuration.
+
+## Better Auth migration (opt-in, acceptance pending)
+
+Default builds still use Auth0. The credential prototype is selected with public `authProvider=better-auth` and an exact HTTPS `authOrigin` in local/Gradle properties. The API must separately enable reviewed Better Auth acceptance after its additive migrations. Keep the existing public Auth0 values during coexistence; the existing exact callback/export/signing checks still run. Never put Google/email/internal keys in mobile settings.
+
+Native forms support password login, identity signup, verification resend, recovery requests and TOTP/backup-code challenges. Only a complete signed session header, validated against the auth service, is saved under a separate Keystore/AES-GCM credential namespace. MFA cookies/passwords/codes stay in memory. Revalidation outages retain stored credentials. User/account onboarding, Google browser OAuth/resource-token verification, native security enrollment/admin handoff, reset-link app associations and physical-device/signed acceptance are not yet complete. Do not distribute this mode as the completed migration.

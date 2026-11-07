@@ -20,6 +20,13 @@ class ReleasePolicyTests(unittest.TestCase):
         valid = XML.replace('</application>', receiver + '</application>')
         self.check(valid)
         with self.assertRaises(ValueError): self.check(valid.replace('android.permission.DUMP', 'android.permission.INTERNET'))
+    def test_better_auth_requires_independently_approved_public_topology(self):
+        xml = XML.replace('</application>', '<meta-data android:name="pro.ezboss.release.AUTH_PROVIDER" android:value="better-auth"/><meta-data android:name="pro.ezboss.release.AUTH_ORIGIN" android:value="https://alpha.example"/></application>')
+        with self.assertRaises(ValueError): self.check(xml)
+        validate(xml, 'pro.ezboss.mobile', 'example.auth0.com', 'audience', 'https://api.test', 'client', 'better-auth', 'https://alpha.example')
+        for origin in ('https://wrong.example', 'http://alpha.example', None):
+            with self.subTest(origin=origin), self.assertRaises(ValueError):
+                validate(xml, 'pro.ezboss.mobile', 'example.auth0.com', 'audience', 'https://api.test', 'client', 'better-auth', origin)
     def test_optimized_python_still_rejects_invalid_policy(self):
         script = "import runpy; runpy.run_path(%r)['validate_manifest']('<manifest package=\"wrong\"><application/></manifest>', 'pro.ezboss.mobile', 'example.auth0.com')" % str(POLICY)
         result = subprocess.run([sys.executable, '-O', '-c', script], capture_output=True)

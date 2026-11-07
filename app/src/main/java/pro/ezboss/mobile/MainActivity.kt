@@ -47,6 +47,8 @@ import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -54,6 +56,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -90,7 +93,7 @@ private const val EstimateDetailRoute = "estimates/{estimateId}"
 
 class MainActivity : ComponentActivity() {
     private val authConfig by lazy { authConfiguration() }
-    private val model: AuthViewModel by viewModels { AuthViewModel.Factory(AuthRepository(applicationContext, authConfig), ApiClient(authConfig.apiBaseUrl)) }
+    private val model: AuthViewModel by viewModels { AuthViewModel.Factory(AuthRepository(applicationContext, authConfig), ApiClient(authConfig.apiBaseUrl, identityDiscovery=authConfig.provider == "better-auth")) }
 
     override fun onStart() {
         super.onStart()
@@ -99,7 +102,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { EzBossTheme { EzBossApp(model, this) } }
+        setContent { EzBossTheme { EzBossLoadingHost(authenticated = model.state is AuthState.Authenticated, signedOut = model.state is AuthState.SignedOut || (model.state as? AuthState.Error)?.sessionExpired == true) { EzBossApp(model, this) } } }
     }
 }
 
@@ -133,10 +136,18 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
 
     private suspend fun <T> authenticatedRequest(accountOnly: Boolean = false, request: suspend (String) -> T): T {
         if (state !is AuthState.Authenticated && !(accountOnly && state is AuthState.CompanySelection)) throw ApiException(401, "Sign in required.")
-        if (busy) throw ApiException(409, "Account access is being checked. Retry shortly.")
+        if (busy || authenticationUnavailable) throw ApiException(503, "Account access is being checked. Retry shortly.")
         val epoch = sessionEpoch.current
         val token = try { auth.accessToken() }
         catch (e: CancellationException) { throw e }
+        catch (e: NativeAuthException) {
+            if(e.status>=500 || e.status==429) {
+                sessionEpoch.requireCurrent(epoch); authenticationUnavailable=true
+                throw ApiException(503,"Authentication temporarily unavailable. Retry shortly.")
+            }
+            sessionEpoch.requireCurrent(epoch)
+            sessionEpoch.advance(); state=AuthState.Error("Sign in again to continue.",retryLogin=true); auth.clearCredentials(); throw e
+        }
         catch (e: Exception) {
             sessionEpoch.requireCurrent(epoch)
             sessionEpoch.advance()
@@ -172,9 +183,27 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     suspend fun customCollection(endpoint: String,key: String,model: String,prompt: String,inventory: org.json.JSONObject) = authenticatedRequest { api.customCollection(endpoint,key,model,prompt,inventory) }
     suspend fun taskPhoto(path: String, jpeg: ByteArray, requestId: String) = authenticatedRequest { api.taskPhoto(it, company(), path, jpeg, requestId) }
     suspend fun draft(id: String) = authenticatedRequest { api.draft(it, company(), id) }
+    suspend fun appendCompanyContacts(clientId: String, contacts: org.json.JSONArray) = authenticatedRequest {
+        api.appendCompanyContacts(it, company(), clientId, contacts)
+    }
     suspend fun saveDraft(draft: org.json.JSONObject) = authenticatedRequest { api.saveDraft(it, company(), draft) }
     suspend fun estimate(id: String) = authenticatedRequest { api.estimate(it, id, company()) }
 
+    var authenticationUnavailable by mutableStateOf(false); private set
+    val usesBetterAuth get() = auth.usesBetterAuth
+    suspend fun nativeRequest(path: String, body: org.json.JSONObject? = null) = auth.nativeRequest(path,body)
+    suspend fun nativeSignIn(email: String, password: String, code: String? = null, backup: Boolean = false): Boolean {
+        check(!busy); busy=true; sessionEpoch.advance()
+        try {
+            val complete=auth.nativeSignIn(email,password,code,backup)
+            if(complete)initialize(auth.accessToken())
+            return complete
+        } finally { busy=false }
+    }
+    suspend fun createNativeCompany(fields: org.json.JSONObject) {
+        check(!busy && state is AuthState.PendingAccount); busy=true;sessionEpoch.advance()
+        try { val token=auth.accessToken();api.createNativeCompany(token,fields);initialize(token) }finally{busy=false}
+    }
     fun restore() = viewModelScope.launch {
         if (busy) return@launch
         busy = true
@@ -182,17 +211,21 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
         if (state !is AuthState.Authenticated) state = AuthState.Loading
         try { auth.restore()?.let { initialize(it.accessToken) } ?: run { state = AuthState.SignedOut } }
         catch (e: CancellationException) { throw e }
+        catch (e: NativeAuthException) {
+            if((e.status>=500 || e.status==429) && (state is AuthState.Authenticated || state is AuthState.CompanySelection))authenticationUnavailable=true
+            else {authenticationUnavailable=false;state = AuthState.Error(e.message ?: "Authentication unavailable", retryLogin = e.status == 401)}
+        }
         catch (_: Exception) { state = AuthState.Error("Sign in is not configured. Please contact your administrator.", retryLogin = true) }
         finally { busy = false }
     }
 
-    fun signIn(activity: ComponentActivity) = viewModelScope.launch {
+    fun signIn(activity: ComponentActivity, createAccount: Boolean = false) = viewModelScope.launch {
         if (busy) return@launch
         busy = true
         sessionEpoch.advance()
         state = AuthState.Loading
         auth.clearCredentials()
-        try { initialize(auth.login(activity).accessToken) }
+        try { initialize(auth.login(activity, createAccount).accessToken) }
         catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             if (e.isAuthenticationCanceled()) state = AuthState.SignedOut
@@ -206,11 +239,15 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
             val account = api.currentUser(token)
             val companies = api.companies(token, selected)
             memberships = companies.memberships; membership = companies.selected
+            authenticationUnavailable=false
             state = if (membership == null) AuthState.CompanySelection(account) else AuthState.Authenticated(account)
         }
         catch (e: ApiException) {
-            if (e.statusCode == 401 || e.statusCode == 403) {
+            if(e.statusCode>=500 && usesBetterAuth && (state is AuthState.Authenticated || state is AuthState.CompanySelection)){authenticationUnavailable=true}
+            else if (e.statusCode == 409 && usesBetterAuth) { state=AuthState.PendingAccount }
+            else if (e.statusCode == 401 || e.statusCode == 403) {
                 auth.clearCredentials()
+                authenticationUnavailable=false
                 state = AuthState.Error(e.message ?: "Access was denied. Please sign in again.", retryLogin = true)
             } else state = AuthState.Error(e.message ?: "Could not initialize your account.")
         } catch (e: CancellationException) { throw e }
@@ -224,20 +261,22 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
         state = AuthState.Loading
         try { initialize(auth.accessToken()) }
         catch (e: CancellationException) { throw e }
+        catch (e: NativeAuthException) { state=AuthState.Error(e.message ?: "Authentication unavailable",retryLogin=e.status==401) }
         catch (_: Exception) {
             auth.clearCredentials()
             state = AuthState.Error("Could not restore your session. Please sign in again.", retryLogin = true)
         } finally { busy = false }
     }
 
-    fun signOut(activity: ComponentActivity) = viewModelScope.launch {
+    fun signOut() = viewModelScope.launch {
         if (busy) return@launch
         busy = true
         sessionEpoch.advance()
+        authenticationUnavailable=false
         state = AuthState.SignedOut
-        try { auth.signOut(activity) }
+        try { auth.signOut() }
         catch (e: CancellationException) { throw e }
-        catch (_: Exception) { state = AuthState.Error("Signed out locally. Browser sign-out did not finish. Sign in again when ready.", retryLogin = true) }
+        catch (_: Exception) { state = AuthState.Error("Session removal failed. Please retry sign-out.", retryLogin = true) }
         finally { busy = false }
     }
 
@@ -253,14 +292,16 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     var protectedSession by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) { model.restore() }
     BackHandler(enabled = drawerOpen) { drawerOpen = false }
+    if(model.authenticationUnavailable)AlertDialog(onDismissRequest={},title={Text("Authentication is temporarily unavailable")},text={Text("Your session and open work are kept. Retry before continuing.")},confirmButton={TextButton(enabled=!model.busy,onClick={model.restore()}){Text("Retry account access")}},dismissButton={TextButton(enabled=!model.busy,onClick={model.signOut()}){Text("Sign out")}})
     Surface(Modifier.fillMaxSize(), color = Canvas) {
         when (val current = model.state) {
-            AuthState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = BrandOrange) }
-            AuthState.SignedOut -> { drawerOpen = false; LoginScreen(model, null) { model.signIn(activity) } }
+            AuthState.PendingAccount -> pro.ezboss.mobile.auth.ui.NativeCompanySetupScreen(model)
+            AuthState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EzBossLoadingIndicator(color = BrandOrange, page = false) }
+            AuthState.SignedOut -> { drawerOpen = false; LoginScreen(model, null, onCreateAccount = { model.signIn(activity, createAccount = true) }) { model.signIn(activity) } }
             is AuthState.Error -> {
                 drawerOpen = false
-                LoginScreen(model, current.message, current.sessionExpired) {
-                    if (current.sessionExpired) model.signOut(activity)
+                LoginScreen(model, current.message, current.sessionExpired, onCreateAccount = { model.signIn(activity, createAccount = true) }) {
+                    if (current.sessionExpired) model.signOut()
                     else if (current.message == MissingAuthConfiguration().message || current.retryLogin) model.signIn(activity)
                     else model.retry()
                 }
@@ -270,33 +311,57 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                 TextButton(onClick={accountRequests=true}){Text("Account requests and terms")}
                 if (model.memberships.isEmpty()) Text("No company is linked. Contact your administrator.")
                 model.memberships.forEach { company -> Button(onClick = { model.selectCompany(company.id) }, enabled = company.available && !model.busy) { Text(company.name) } }
-                Button(onClick = { model.signOut(activity) }) { Text("Sign out") }
+                Button(onClick = { model.signOut() }) { Text("Sign out") }
             }
             is AuthState.Authenticated -> key(protectedSession, model.membership) {
         AuthenticatedShell(current.account, model, drawerOpen, { drawerOpen = true }, { drawerOpen = false }, model.busy) {
                     drawerOpen = false
                     protectedSession++
-                    model.signOut(activity)
+                    model.signOut()
                 }
             }
         }
     }
 }
 
-@Composable private fun LoginScreen(model: AuthViewModel, error: String?, expired: Boolean = false, onAction: () -> Unit) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 30.dp, vertical = 24.dp), horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.Center) {
-        Text("EzBoss", color = BrandOrange, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(56.dp))
-        Text("Welcome back", color = Ink, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(10.dp))
-        Text("Sign in to manage your business.", color = EzBossDesign.Muted, style = MaterialTheme.typography.bodyLarge)
-        if (error != null) {
-            Spacer(Modifier.height(24.dp)); Text(error, color = MaterialTheme.colorScheme.error)
-            Spacer(Modifier.height(12.dp))
-        } else Spacer(Modifier.height(28.dp))
-        Button(onClick = onAction, enabled = !model.busy, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = EzBossDesign.OrangeDark)) {
-            if (model.busy) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
-            else Text(if (error == null || expired) "Sign In" else "Retry", fontWeight = FontWeight.SemiBold)
+@Composable private fun LoginScreen(model: AuthViewModel, error: String?, expired: Boolean = false, onCreateAccount: () -> Unit, onAction: () -> Unit) {
+    if (model.usesBetterAuth) { pro.ezboss.mobile.auth.ui.NativeIdentityScreen(model,error); return }
+
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFFF5F5F1)).safeDrawingPadding()) {
+        val viewportHeight = maxHeight
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(Modifier.widthIn(max = 520.dp).fillMaxWidth().heightIn(min = viewportHeight).padding(horizontal = 24.dp).padding(top = 16.dp, bottom = 24.dp)) {
+                androidx.compose.foundation.Image(
+                    painter = androidx.compose.ui.res.painterResource(R.drawable.ezboss_loading),
+                    contentDescription = "EzBoss",
+                    modifier = Modifier.width(186.dp).height(56.dp),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                )
+                Spacer(Modifier.height(32.dp))
+                Text("BUILT FOR THE WAY CONTRACTORS WORK", color = Color(0xFF202321), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
+                Spacer(Modifier.height(20.dp))
+                Text("Welcome to EzBoss", color = Color(0xFF636861), style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.semantics { heading() })
+                Spacer(Modifier.height(20.dp))
+                Text("Less tedious estimates.", color = Color(0xFF202321), fontSize = 38.sp, lineHeight = 40.sp, letterSpacing = (-1.4).sp, fontWeight = FontWeight.ExtraBold)
+                Text("More building.", color = Color(0xFFED5909), fontSize = 38.sp, lineHeight = 40.sp, letterSpacing = (-1.4).sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(Modifier.height(24.dp))
+                Text("Put your imported data to work. Turn the materials and labor you already have into reusable collections—and your next estimate into a much shorter to-do.", color = Color(0xFF636861), style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp)
+                Spacer(Modifier.height(24.dp))
+                if (error != null) {
+                    Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite })
+                    Spacer(Modifier.height(20.dp))
+                }
+                Button(onClick = onAction, enabled = !model.busy, modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp), shape = RoundedCornerShape(4.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFED5909))) {
+                    if (model.busy) EzBossLoadingIndicator(Modifier.width(100.dp), color = Color.White, strokeWidth = 2.dp, page = false)
+                    else Text(if (error == null || expired) "Sign In" else "Retry", fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(onClick = onCreateAccount, enabled = !model.busy, modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp), shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White, contentColor = Color(0xFF202321))) {
+                    Text("Create Account", fontWeight = FontWeight.SemiBold)
+                }
+            }
         }
     }
 }
@@ -412,7 +477,7 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                 if (!canOpen(destination.route)) {
                     Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         Text(if(accessError) "Workspace access could not be loaded." else if(!accessLoaded) "Loading workspace access…" else "This page is unavailable for your account.")
-                        if(!accessLoaded && !accessError) CircularProgressIndicator() else TextButton(onClick = retryAccess) { Text("Retry workspace access") }
+                        if(!accessLoaded && !accessError) EzBossLoadingIndicator() else TextButton(onClick = retryAccess) { Text("Retry workspace access") }
                     }
                 }
                 else if (destination.route == "dashboard") DashboardScreen(account, model, { navController.navigate("estimates/$it") }, { navController.navigate(it) { launchSingleTop = true } }, canOpen)

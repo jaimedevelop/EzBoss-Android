@@ -77,7 +77,7 @@ fun OperationsScreen(model: AuthViewModel, destination: String, canOpen: (String
             creating -> OperationEditor(model,path,kind,null) { creating=false;reload++ }
             else -> {
                 OutlinedTextField(search,{search=it},label={Text("Search")},modifier=Modifier.fillMaxWidth())
-                if (busy) CircularProgressIndicator()
+                if (busy) EzBossLoadingIndicator()
                 error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
                 TextButton(onClick={page=0;reload++},enabled=!busy) { Text("Refresh / retry") }
                 if (destination in listOf("inventory","collections","purchasing")) Button(onClick={creating=true}) { Text("Create") }
@@ -189,7 +189,7 @@ fun OperationsScreen(model: AuthViewModel, destination: String, canOpen: (String
         try {model.operation("$path/$id"+(if(command.isBlank()) "" else "/$command"),method,body);requestId=UUID.randomUUID().toString();if(method=="DELETE")back() else reload++}catch(e:Exception){error=e.message}finally{busy=false}
     }}
     TextButton(onClick=back,enabled=!busy){Text("Back")}
-    if(busy)CircularProgressIndicator()
+    if(busy)EzBossLoadingIndicator()
     error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
     TextButton(onClick={reload++},enabled=!busy){Text("Refresh / retry")}
     if(editing){OperationEditor(model,path,kind,row){editing=false;reload++};return}
@@ -306,7 +306,7 @@ fun OperationsScreen(model: AuthViewModel, destination: String, canOpen: (String
         Text("Import collection",style=MaterialTheme.typography.titleLarge)
         TextButton(onClick=close,enabled=!busy){Text("Back to draft")}
         error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
-        if(busy)CircularProgressIndicator()
+        if(busy)EzBossLoadingIndicator()
         if(preview!=null){
             (0 until preview!!.length()).forEach { i -> val line=preview!!.getJSONObject(i);Text(line.optString("name")+" — "+line.optString("quantity")+" × "+line.optString("unitPrice")) }
             Button(enabled=!busy&&preview!!.length()>0,onClick={add(preview!!)}){Text("Add reviewed lines to draft")}
@@ -455,7 +455,7 @@ fun OperationsScreen(model: AuthViewModel, destination: String, canOpen: (String
             proposal=result.getJSONObject("collection");preview=result.rows("preview");requestId=UUID.randomUUID().toString()
         }catch(e:Exception){message="Generation did not complete. Your prompt and previous review are preserved. Check provider/model and retry."}finally{busy=false}
     }}){Text("Generate suggestions")}
-    if(busy)CircularProgressIndicator()
+    if(busy)EzBossLoadingIndicator()
     proposal?.let { collection ->
         Text("Review collection",style=MaterialTheme.typography.titleMedium)
         OutlinedTextField(collection.optString("name"),{proposal=JSONObject(collection.toString()).put("name",it)},label={Text("Name")},enabled=!busy)

@@ -18,11 +18,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import pro.ezboss.mobile.data.*
 import java.text.NumberFormat
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import java.util.Locale
 import org.json.JSONObject
 import org.json.JSONArray
@@ -104,14 +109,14 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
         if (estimateFilter != "All" || clientFilter != "Any") Text("${estimateFilter.takeIf { it != "All" } ?: "Any type"} · ${clientFilter.takeIf { it != "Any" } ?: "Any client status"}", Modifier.fillMaxWidth().background(Color.White).padding(start = 16.dp, bottom = 8.dp), color = EzBossDesign.Muted, fontSize = 12.sp)
         HorizontalDivider(color = EzBossDesign.Border)
         when {
-            loading && rows.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            loading && rows.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EzBossLoadingIndicator() }
             error != null && rows.isEmpty() -> StateMessage(if (denied) "Access denied" else "Couldn’t load estimates", error!!, if (denied) null else "Retry") { generation++; load(true) }
             rows.isEmpty() -> StateMessage(if (search.isNotBlank() || estimateFilter != "All" || clientFilter != "Any") "No matching estimates" else "No estimates yet", if (search.isNotBlank() || estimateFilter != "All" || clientFilter != "Any") "Try changing your search or filters." else "Estimates will appear here when they are available.", null) {}
             else -> LazyVerticalGrid(columns = GridCells.Adaptive(160.dp), contentPadding = PaddingValues(EzBossDesign.PagePadding), horizontalArrangement = Arrangement.spacedBy(EzBossDesign.Gap), verticalArrangement = Arrangement.spacedBy(EzBossDesign.Gap), modifier = Modifier.fillMaxSize()) {
                 items(rows, key = { it.id }) { item -> EstimateCard(item) { onOpen(item.id) } }
                 if (canLoadMore) item(span = { GridItemSpan(maxLineSpan) }) {
                     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        if (loadingMore) CircularProgressIndicator(Modifier.size(24.dp))
+                        if (loadingMore) EzBossLoadingIndicator(Modifier.width(100.dp), page = false)
                         else if (error != null) TextButton(onClick = { load(false) }) { Text("Couldn’t load more · Retry") }
                         else OutlinedButton(onClick = { load(false) }, shape = EzBossDesign.ControlShape) { Text("Load 25 more") }
                     }
@@ -158,10 +163,12 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
     var acting by remember { mutableStateOf(false) }
     var actionMessage by remember { mutableStateOf<String?>(null) }
     var revokeWarning by remember { mutableStateOf(false) }
+    var retry by remember(id) { mutableIntStateOf(0) }
     fun act(action: String, body: JSONObject = JSONObject()) { scope.launch {
         acting = true; actionMessage = null
         try {
             val result = model.documentAction(id, action, body)
+            if (action == "issue-invoice") retry++
             if (action == "share-link") {
                 context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(result.getString("url"))))
             }
@@ -181,7 +188,6 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
     var denied by remember(id) { mutableStateOf(false) }
     var tab by rememberSaveable(id) { mutableStateOf("Estimate") }
     var loading by remember(id) { mutableStateOf(true) }
-    var retry by remember(id) { mutableIntStateOf(0) }
     LaunchedEffect(id, retry) {
         loading = true; error = null
         try { estimate = model.estimate(id) }
@@ -189,35 +195,89 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
         catch (e: Exception) { error = e.message ?: "Could not load this estimate. Retry." }
         finally { loading = false }
     }
+    LaunchedEffect(id, tab, loading) {
+        if (tab != "Timeline" || loading || estimate == null) return@LaunchedEffect
+        while (true) {
+            try {
+                if (!acting) {
+                    val latest = model.estimate(id)
+                    if (!acting) estimate = latest
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // Keep the displayed timeline if a background refresh fails.
+            }
+            delay(10_000)
+        }
+    }
     Column(Modifier.fillMaxSize().background(EzBossDesign.Canvas)) {
         Row(Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = onReturn) { Icon(Icons.Default.ArrowBack, "Return to estimates") }; Text("Back to estimates", Modifier.clickable(onClick = onReturn).padding(8.dp), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold) }
         HorizontalDivider()
-        if (loading) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        if (loading) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EzBossLoadingIndicator() }
         else if (estimate == null) StateMessage(if (denied) "Access denied" else "Estimate unavailable", error ?: "This estimate may have been deleted.", if (denied) null else "Retry") { retry++ }
         else {
             val value = estimate!!
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                TextButton(onClick = { act("send-email") }, enabled = !acting) { Text("Send / resend") }
-                TextButton(onClick = { act("share-link") }, enabled = !acting) { Text("Customer view / checkout") }
-                if (value.estimateState in listOf("draft", "estimate")) TextButton(onClick = { act("issue-invoice") }, enabled = !acting) { Text("Issue invoice") }
-                TextButton(onClick = { revokeWarning = true }, enabled = !acting) { Text("Revoke links") }
-                TextButton(onClick = { retry++ }, enabled = !acting) { Text("Refresh") }
+            val tabs = estimateDashboardTabs(value.estimateState == "change-order")
+            ScrollableTabRow(selectedTabIndex = tabs.indexOfFirst { it.label == tab }.coerceAtLeast(0), edgePadding = 0.dp, containerColor = Color.White) {
+                tabs.forEach { contract ->
+                    Tab(selected = tab == contract.label, onClick = { tab = contract.label }, text = {
+                        Text(if (contract.label == "Estimate" && value.estimateState == "invoice") "Invoice" else contract.label)
+                    })
+                }
             }
-            if (value.collectionHold) {
-                Text("Collection is on hold pending approval of revision ${value.currentRevision}.", Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
+            if (tab == "Estimate") {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    TextButton(onClick = { act("send-email") }, enabled = !acting) { Text("Send / resend") }
+                    TextButton(onClick = { act("share-link") }, enabled = !acting) { Text("Customer view / checkout") }
+                    if (value.estimateState in listOf("draft", "estimate")) TextButton(onClick = { act("issue-invoice") }, enabled = !acting) { Text("Issue invoice") }
+                    TextButton(onClick = { revokeWarning = true }, enabled = !acting) { Text("Revoke links") }
+                    TextButton(onClick = { retry++ }, enabled = !acting) { Text("Refresh") }
+                }
+                if (value.collectionHold) {
+                    Text("Collection is on hold pending approval of revision ${value.currentRevision}.", Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
+                }
+                if (value.estimateState != "invoice" && (value.collectionHold || value.clientState != "accepted")) TextButton(onClick = { approvalOpen = true }, enabled = !acting) { Text("Record off-app client approval") }
+                TextButton(onClick = { editing = true }) { Text("Edit document") }
             }
-            if (value.estimateState != "invoice" && (value.collectionHold || value.clientState != "accepted")) TextButton(onClick = { approvalOpen = true }, enabled = !acting) { Text("Record off-app client approval") }
             actionMessage?.let { Text(it, Modifier.padding(horizontal = 16.dp)) }
-            TextButton(onClick = { editing = true }) { Text("Edit document") }
-            Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(Color.White)) {
-                Row { estimateDashboardTabs(value.estimateState == "change-order").forEach { contract ->
-                    val name = contract.label
-                    val enabled = contract.enabled
-                    Column(Modifier.clickable(enabled = enabled) { tab = name }.padding(horizontal = 12.dp, vertical = 13.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text(name, color = if (tab == name) MaterialTheme.colorScheme.primary else EzBossDesign.Muted, fontSize = 13.sp, fontWeight = if (tab == name) FontWeight.SemiBold else FontWeight.Normal); if (!enabled) Text("Coming soon", color = EzBossDesign.Muted, fontSize = 9.sp) }
-                } }
-                HorizontalDivider(color = EzBossDesign.Border)
+            if (tab == "Client View") TextButton(onClick = { act("share-link") }, enabled = !acting) { Text("Open customer view / checkout") }
+            when (tab) {
+                "Estimate" -> EstimateInformation(value)
+                "Client View" -> ClientPreview(value)
+                else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    DetailSection(tab) {
+                        when (tab) {
+                            "History" -> if (value.history.isEmpty()) Text("No revision history yet.") else value.history.forEach { event ->
+                                Text(event.changes)
+                                Text("${event.actor} · ${event.date}", color = EzBossDesign.Muted, fontSize = 12.sp)
+                            }
+                            "Timeline" -> {
+                                Text("Viewed by Customer", fontWeight = FontWeight.SemiBold)
+                                Text(if (value.customerViews.any { it.matchesCurrent == true }) "Current version viewed" else "Current version awaiting a view",
+                                    color = MaterialTheme.colorScheme.primary)
+                                if (value.customerViews.isEmpty()) Text("No customer views recorded yet.", color = EzBossDesign.Muted)
+                                val formatter = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM).withZone(ZoneId.systemDefault())
+                                value.customerViews.forEach { view ->
+                                    HorizontalDivider()
+                                    Text(runCatching { formatter.format(Instant.parse(view.viewedAt)) }.getOrDefault(view.viewedAt))
+                                    Text(when (view.matchesCurrent) {
+                                        true -> "Current version"
+                                        false -> "Earlier version"
+                                        null -> "Version unavailable"
+                                    }, color = EzBossDesign.Muted, fontSize = 12.sp)
+                                }
+                                if (value.validUntil.isNotBlank()) Text("Valid until ${value.validUntil}")
+                                Text("Milestone scheduling is available in the web app.")
+                            }
+                            else -> {
+                                Text("Manage ${tab.lowercase()} for this document in the web app.")
+                                if (tab == "Payments") TextButton(onClick = { act("share-link") }, enabled = !acting) { Text("Open customer checkout") }
+                            }
+                        }
+                    }
+                }
             }
-            if (tab == "Estimate") EstimateInformation(value) else ClientPreview(value)
         }
     }
     if (approvalOpen) AlertDialog(onDismissRequest = { approvalOpen = false }, title = { Text("Record client approval") }, text = {
@@ -244,7 +304,6 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
             else value.lines.sortedBy { it.sortOrder }.forEach { line -> Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) { Column(Modifier.weight(1f)) { Text(line.description, fontWeight = FontWeight.Medium); Text("${line.quantity} × ${money(line.unitPrice)}", color = EzBossDesign.Muted, fontSize = 12.sp) }; Text(money(line.total), fontWeight = FontWeight.SemiBold) }; HorizontalDivider() }
         }
         DetailSection("Totals") { TotalRow("Subtotal", value.subtotal); TotalRow("Tax (${value.taxRate}%)", value.tax); HorizontalDivider(); TotalRow("Total", value.total, true) }
-        DetailSection("History") { value.history.forEach { event -> Text(event.changes); Text("${event.actor} · ${event.date}", color = EzBossDesign.Muted, fontSize = 12.sp) } }
         Text("Use Customer view / checkout to open the current customer link.", color = EzBossDesign.Muted, fontSize = 12.sp)
     }
 }
@@ -256,6 +315,7 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
         Column(Modifier.fillMaxWidth().background(Color.White, EzBossDesign.CardShape).border(1.dp, EzBossDesign.Border, EzBossDesign.CardShape).padding(18.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Text(if (value.estimateState == "invoice") "Invoice" else if (value.estimateState == "change-order") "Change Order" else "Estimate", fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Text("#${value.invoiceNumber.takeIf { value.estimateState == "invoice" } ?: value.number}", color = EzBossDesign.Muted)
+            Text("Date: ${value.documentDate ?: "—"}", color = EzBossDesign.Muted)
             if (value.contractor.isNotBlank()) Text(value.contractor, fontWeight = FontWeight.SemiBold)
             listOf(value.contractorAddress, value.contractorPhone, value.contractorEmail, value.contractorWebsite).filter(String::isNotBlank).forEach { Text(it, fontSize = 12.sp, color = EzBossDesign.Muted) }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
@@ -297,6 +357,8 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
     var reloadWarning by remember { mutableStateOf(false) }
     var customersOpen by remember { mutableStateOf(false) }
     var importingCollection by remember { mutableStateOf(false) }
+    var addingCompanyContact by rememberSaveable { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     fun load() { scope.launch {
         busy = true; error = null
@@ -318,11 +380,33 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
         TextButton(onClick = onClose, enabled = !busy) { Text("Back to documents") }
         Text(if (id == null) "Estimate draft" else "Edit document", style = MaterialTheme.typography.headlineSmall)
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        if (busy) CircularProgressIndicator()
+        if (busy) EzBossLoadingIndicator()
         if (ready) {
             val draft = JSONObject(encoded)
             fun field(key: String, value: String) { draft.put(key, value); encoded = draft.toString() }
             TextButton(onClick = { customersOpen = true }, enabled = !busy) { Text("Select saved client or contact") }
+            val snapshot = draft.optJSONObject("clientSnapshot")
+            val additions = draft.optJSONArray("companyContactAdditions")
+            if (snapshot?.optString("billTo") == "company" && !draft.isNull("customerId") &&
+                draft.optString("estimateState") != "change-order") {
+                TextButton(onClick = { addingCompanyContact = true }, enabled = !busy) { Text("Add company contact") }
+                if (additions != null) {
+                    Text("New contacts will be added to the company when you save.")
+                    repeat(additions.length()) { index ->
+                        val contact = additions.getJSONObject(index)
+                        val label = listOf("name", "email", "phone", "note").firstNotNullOfOrNull {
+                            contact.optString(it).takeIf(String::isNotBlank)
+                        }
+                        TextButton(onClick = {
+                            val contacts = snapshot.getJSONArray("additionalContacts")
+                            contacts.remove(contacts.length() - additions.length() + index)
+                            additions.remove(index)
+                            if (additions.length() == 0) draft.remove("companyContactAdditions")
+                            encoded = draft.toString()
+                        }, enabled = !busy) { Text("Remove new contact: $label") }
+                    }
+                }
+            }
             OutlinedTextField(draft.optString("customerName"), { field("customerName", it) }, label = { Text("Customer name") }, enabled = !busy)
             OutlinedTextField(draft.optString("customerEmail", ""), { field("customerEmail", it) }, label = { Text("Email (optional)") }, enabled = !busy)
             OutlinedTextField(draft.optString("projectDescription", ""), { field("projectDescription", it) }, label = { Text("Scope description") }, enabled = !busy)
@@ -340,7 +424,17 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
             TextButton(onClick = { lines.put(JSONObject().put("description", "").put("quantity", 1).put("unitPrice", 0).put("type", "manual")); draft.put("lineItems", lines); encoded = draft.toString() }, enabled = !busy) { Text("Add manual line") }
             Button(onClick = { scope.launch {
                 busy = true; error = null
-                try { val saved = model.saveDraft(JSONObject(encoded)); encoded = saved.toString(); onSaved(saved.get("id").toString()) }
+                try {
+                    val saved = model.saveDraft(JSONObject(encoded))
+                    encoded = saved.toString()
+                    saved.optJSONObject("companyContactsAdded")?.let { added ->
+                        val company = added.getString("companyName")
+                        val count = added.getInt("count")
+                        val message = if (count == 1) "Contact added to “$company”." else "$count contacts added to “$company”."
+                        android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                    onSaved(saved.get("id").toString())
+                }
                 catch (e: kotlinx.coroutines.CancellationException) { throw e }
                 catch (e: ApiException) { error = e.message }
                 catch (e: IllegalArgumentException) { error = e.message }
@@ -350,9 +444,35 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
         }
         if (id != null) TextButton(onClick = { reloadWarning = true }, enabled = !busy) { Text("Reload stored draft") }
     }
+    if (addingCompanyContact) CompanyContactDialog(onClose = { addingCompanyContact = false }) { contact ->
+        val draft = JSONObject(encoded)
+        val additions = draft.optJSONArray("companyContactAdditions") ?: JSONArray()
+        additions.put(contact)
+        val result = model.appendCompanyContacts(draft.getString("customerId"), additions)
+        val snapshot = draft.getJSONObject("clientSnapshot")
+        val contacts = snapshot.optJSONArray("additionalContacts") ?: JSONArray()
+        snapshot.put("additionalContacts", contacts.put(contact))
+        draft.remove("companyContactAdditions")
+        encoded = draft.toString()
+        result.optJSONObject("companyContactsAdded")?.let { added ->
+            val company = added.getString("companyName")
+            val count = added.getInt("count")
+            val message = if (count == 1) "Contact added to “$company”." else "$count contacts added to “$company”."
+            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+        }
+        addingCompanyContact = false
+    }
     if (customersOpen) CustomerPickerDialog(model, onClose = { customersOpen = false }) { customer, contact ->
         val draft = JSONObject(encoded)
-        draft.put("customerId", customer.get("id").toString()).put("clientSnapshot", customer)
+        val customerId = customer.get("id").toString()
+        if (draft.optString("customerId") != customerId) draft.remove("companyContactAdditions")
+        val snapshot = JSONObject(customer.toString())
+        draft.optJSONArray("companyContactAdditions")?.let { additions ->
+            val contacts = snapshot.optJSONArray("additionalContacts") ?: JSONArray()
+            repeat(additions.length()) { contacts.put(additions.getJSONObject(it)) }
+            snapshot.put("additionalContacts", contacts)
+        }
+        draft.put("customerId", customerId).put("clientSnapshot", snapshot)
             .put("customerName", customer.optString("name", customer.optString("companyName")))
             .put("customerEmail", contact?.optString("email") ?: customer.optString("email", ""))
             .put("customerPhone", contact?.optString("phone") ?: customer.optString("phoneMobile", ""))
@@ -364,6 +484,46 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
     if (reloadWarning) AlertDialog(onDismissRequest = { reloadWarning = false }, title = { Text("Discard local edits?") }, confirmButton = { TextButton(onClick = { reloadWarning = false; load() }) { Text("Discard and reload") } }, dismissButton = { TextButton(onClick = { reloadWarning = false }) { Text("Keep editing") } })
 }
 
+
+@Composable private fun CompanyContactDialog(onClose: () -> Unit, onAdd: suspend (JSONObject) -> Unit) {
+    var name by rememberSaveable { mutableStateOf("") }
+    var phone by rememberSaveable { mutableStateOf("") }
+    var email by rememberSaveable { mutableStateOf("") }
+    var note by rememberSaveable { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val invalidEmail = email.isNotBlank() && !Regex("[^\\s@]+@[^\\s@]+\\.[^\\s@]+").matches(email.trim())
+    AlertDialog(
+        onDismissRequest = { if (!busy) onClose() },
+        title = { Text("Add company contact") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                OutlinedTextField(name, { name = it }, enabled = !busy, label = { Text("Name") })
+                OutlinedTextField(phone, { phone = it }, enabled = !busy, label = { Text("Phone") })
+                OutlinedTextField(email, { email = it }, enabled = !busy, label = { Text("Email") }, isError = invalidEmail)
+                OutlinedTextField(note, { note = it }, enabled = !busy, label = { Text("Note") })
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !busy && !invalidEmail && listOf(name, phone, email, note).any(String::isNotBlank),
+                onClick = {
+                    scope.launch {
+                        busy = true
+                        error = null
+                        try { onAdd(JSONObject().put("name", name.trim()).put("phone", phone.trim()).put("email", email.trim()).put("note", note.trim())) }
+                        catch (e: CancellationException) { throw e }
+                        catch (e: Exception) { error = e.message ?: "Could not confirm the company contact save. Retry to confirm." }
+                        finally { busy = false }
+                    }
+                },
+            ) { Text(if (busy) "Saving…" else "Add") }
+        },
+        dismissButton = { TextButton(onClick = onClose, enabled = !busy) { Text("Cancel") } },
+    )
+}
 
 @Composable private fun CustomerPickerDialog(model: AuthViewModel, onClose: () -> Unit, select: (JSONObject, JSONObject?) -> Unit) {
     var search by remember { mutableStateOf("") }
@@ -390,7 +550,7 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
             OutlinedTextField(search, { search = it }, label = { Text("Client name") }, enabled = !busy)
             TextButton(onClick = { load(true) }, enabled = !busy) { Text("Search / retry") }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            if (busy) CircularProgressIndicator()
+            if (busy) EzBossLoadingIndicator()
             rows.forEach { customer ->
                 val name = customer.optString("name", "Customer")
                 TextButton(onClick = { select(customer, null) }) { Text(name) }

@@ -9,9 +9,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.Business
 import androidx.compose.material.icons.outlined.Checklist
-import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -71,12 +69,15 @@ internal fun dashboardDate(value: String, zone: ZoneId): LocalDate? = runCatchin
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             listOf(
                 Triple("Estimates", "estimates", Icons.Outlined.Description),
-                Triple("Projects", "projects", Icons.Outlined.Business),
                 Triple("Work Orders", "work-orders", Icons.Outlined.Checklist),
-                Triple("Finances", "finance", Icons.Outlined.AccountBalanceWallet),
-            ).filter { canOpen(it.second) }.chunked(if (androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.3f) 1 else 2).forEach { group ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    group.forEach { (title, route, icon) -> WorkspaceTile(title, icon, Modifier.weight(1f)) { navigate(route) } }
+            ).filter { canOpen(it.second) }.forEach { (title, route, icon) ->
+                Surface(onClick = { navigate(route) }, modifier = Modifier.fillMaxWidth(),
+                    shape = EzBossDesign.CardShape, color = EzBossDesign.OrangeDark, contentColor = Color.White) {
+                    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 20.dp, vertical = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Icon(icon, contentDescription = null)
+                        Text(title, style = MaterialTheme.typography.titleLarge)
+                    }
                 }
             }
             TextButton(onClick = { refresh++ }) { Text("Refresh dashboard") }
@@ -84,7 +85,7 @@ internal fun dashboardDate(value: String, zone: ZoneId): LocalDate? = runCatchin
             if (canOpen("estimates")) DashboardCard("Estimates & Invoices") {
                 if (clientsUnavailable) Text("Billing addresses unavailable: linked client data could not be accessed.", style = MaterialTheme.typography.bodySmall)
                 PeriodPicker(days, listOf("Last 7 days", "Last 30 days", "Last 90 days")) { days = it }
-                DashboardRequest(model, "estimates", refresh) { response ->
+                DashboardRequest(model, "estimates?summary=true", refresh) { response ->
                     val rows = (response as JSONArray).rows()
                     val start = today.minusDays(when(days) { "Last 30 days" -> 29; "Last 90 days" -> 89; else -> 6 })
                     listOf("estimate", "invoice").forEach { kind ->
@@ -170,7 +171,7 @@ internal fun dashboardBalance(invoice: JSONObject, rows: List<JSONObject>): java
         catch (e: CancellationException) { throw e }
         catch (e: Exception) { error = e.message ?: "Unable to load data." }
     }
-    when { error != null -> { Text(error!!, color = MaterialTheme.colorScheme.error); TextButton(onClick = { retry++ }) { Text("Try again") } }; data == null -> CircularProgressIndicator(Modifier.size(24.dp)); else -> content(data!!) }
+    when { error != null -> { Text(error!!, color = MaterialTheme.colorScheme.error); TextButton(onClick = { retry++ }) { Text("Try again") } }; data == null -> EzBossLoadingIndicator(); else -> content(data!!) }
 }
 @Composable private fun ScheduleCard(model: AuthViewModel, refresh: Int, navigate: (String) -> Unit) {
     var period by rememberSaveable { mutableStateOf("Daily") }

@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
 data class Account(val id: String, val auth0Id: String, val email: String, val displayName: String?, val roleName: String?, val isSuperuser: Boolean, val pageKeys: List<String>, val featureKeys: List<String>)
 class ApiException(val statusCode: Int, message: String) : IOException(message)
 
-class ApiClient(baseUrl: String, transport: OkHttpClient = OkHttpClient()) {
+class ApiClient(baseUrl: String, transport: OkHttpClient = OkHttpClient(), private val identityDiscovery: Boolean = false) {
     private val baseUrl = baseUrl.trimEnd('/')
     private val http = transport.newBuilder().callTimeout(20, TimeUnit.SECONDS)
         .followRedirects(false).followSslRedirects(false).build()
@@ -29,6 +29,12 @@ class ApiClient(baseUrl: String, transport: OkHttpClient = OkHttpClient()) {
 
     suspend fun currentUser(token: String): Account = withContext(Dispatchers.IO) {
         requireSecureConfiguration(token)
+        if(identityDiscovery) {
+            http.newCall(Request.Builder().url("$baseUrl/account/me").header("Authorization","Bearer $token").get().build()).execute().use { response ->
+                if(!response.isSuccessful && response.code !in listOf(403,409))throw ApiException(response.code,"Account discovery is temporarily unavailable. Retry.")
+                if(response.isSuccessful && JSONObject(response.body?.string().orEmpty()).optBoolean("pendingIdentity"))throw ApiException(409,"Complete account setup to continue.")
+            }
+        }
         val request = Request.Builder().url("$baseUrl/users/me").header("Authorization", "Bearer $token").get().build()
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw ApiException(response.code, when (response.code) {
@@ -41,10 +47,16 @@ class ApiClient(baseUrl: String, transport: OkHttpClient = OkHttpClient()) {
             if (json.optString("status") != "active") throw ApiException(403, "This account is inactive. Contact your administrator.")
             val accountId = json.optLong("id", 0)
             if (accountId <= 0) throw IOException("Invalid account response")
-            Account(accountId.toString(), json.optString("auth0Id"), json.optString("email"),
+            Account(accountId.toString(), if(json.isNull("auth0Id")) "" else json.optString("auth0Id"), json.optString("email"),
                 usableName(json.opt("displayName")), usableName(json.opt("roleName")),
                 json.optBoolean("isSuperuser"), json.stringKeys("pageKeys"), json.stringKeys("featureKeys"))
         }
+    }
+
+    suspend fun createNativeCompany(token: String, fields: JSONObject) = withContext(Dispatchers.IO) {
+        requireSecureConfiguration(token)
+        val request=Request.Builder().url("$baseUrl/onboarding/contractor").header("Authorization","Bearer $token").post(fields.toString().toRequestBody("application/json".toMediaType())).build()
+        http.newCall(request).execute().use { response -> if(!response.isSuccessful)throw ApiException(response.code,"Company setup was not confirmed. Retry account access before submitting again.") }
     }
 
     suspend fun estimates(token: String, membership: String, customerName: String, estimateState: String?, clientState: String?, offset: Int, limit: Int = 25): EstimatePage = withContext(Dispatchers.IO) {
@@ -67,6 +79,18 @@ class ApiClient(baseUrl: String, transport: OkHttpClient = OkHttpClient()) {
         val row = get("$baseUrl/estimates/${encode(id)}", token, membership) as JSONObject
         if (row.optString("estimateState") !in listOf("draft", "estimate", "change-order", "invoice")) throw ApiException(409, "This document cannot be edited.")
         row.put("expectedUpdatedAt", row.getString("updatedAt")).put("draftOnly", row.optString("estimateState") == "draft")
+    }
+
+    suspend fun appendCompanyContacts(token: String, membership: String, clientId: String, contacts: JSONArray): JSONObject = withContext(Dispatchers.IO) {
+        requireSecureConfiguration(token)
+        val body = JSONObject().put("additionalContacts", contacts)
+        val request = Request.Builder().url("$baseUrl/clients/${encode(clientId)}/contacts")
+            .header("Authorization", "Bearer $token").header("X-Company-Membership-Id", membership)
+            .post(body.toString().toRequestBody("application/json".toMediaType())).build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw ApiException(response.code, "Could not confirm the company contact save. Your details are preserved. Retry to confirm.")
+            JSONObject(response.body?.string() ?: throw IOException("Contact save was not confirmed"))
+        }
     }
 
     suspend fun saveDraft(token: String, membership: String, draft: JSONObject): JSONObject = withContext(Dispatchers.IO) {
@@ -166,7 +190,7 @@ class ApiClient(baseUrl: String, transport: OkHttpClient = OkHttpClient()) {
             membership?.let { header("X-Company-Membership-Id", it) }
         }.get().build()
         http.newCall(request).execute().use { response ->
-            if (!response.isSuccessful && !(discovery && response.code == 409)) throw ApiException(response.code, when (response.code) {
+            if (!response.isSuccessful && !(discovery && response.code in listOf(403,409))) throw ApiException(response.code, when (response.code) {
                 401 -> "Your session has expired. Please sign in again."
                 409 -> "Select a company to continue."
                 403 -> "You don’t have permission to view this data."
@@ -196,6 +220,13 @@ class ApiClient(baseUrl: String, transport: OkHttpClient = OkHttpClient()) {
             contractor = row.optString("contractorCompany"), contractorAddress = row.optString("contractorCompanyAddress"), contractorPhone = row.optString("contractorCompanyPhone"), contractorEmail = row.optString("contractorCompanyEmail"), contractorWebsite = row.optString("contractorCompanyWebsite"),
             lines = lines, groups = groups, displayMode = settings?.optString("displayMode", "list") ?: "list", hidden = hidden,
             showEstimate = settings?.optBoolean("showEstimateTab", true) ?: true, showItemPrices = settings?.optBoolean("showItemPrices", true) ?: true, showGroupPrices = settings?.optBoolean("showGroupPrices", true) ?: true,
+            documentDate = (usableName(row.opt("createdDate")) ?: usableName(row.opt("createdAt")))?.take(10),
+            customerViews = row.optJSONArray("customerViews")?.let { views ->
+                (0 until views.length()).map { index ->
+                    val view = views.getJSONObject(index)
+                    EstimateCustomerView(view.getString("viewedAt"), view.opt("matchesCurrent") as? Boolean)
+                }
+            }.orEmpty(),
             currentRevision = row.optInt("currentRevision"), collectionHold = row.optBoolean("collectionHold"),
             history = row.optJSONArray("revisionsHistory")?.let { events -> (0 until events.length()).map { index -> events.getJSONObject(index).let { EstimateHistory(it.optString("date"), it.optString("changes"), usableName(it.opt("modifiedByName")) ?: "Actor recorded") } } } ?: emptyList(),
             showSubtotal = settings?.optBoolean("showSubtotal", true) ?: true, showTax = settings?.optBoolean("showTax", true) ?: true, showTotal = settings?.optBoolean("showTotal", true) ?: true,
@@ -216,7 +247,7 @@ data class EstimatePage(val items: List<EstimateListItem>, val canLoadMore: Bool
 data class EstimateListItem(val id: String, val number: String, val customer: String, val estimateState: String, val clientState: String?, val total: Double)
 data class EstimateLine(val id: String, val description: String, val quantity: Double, val unitPrice: Double, val total: Double, val type: String, val groupId: String, val sortOrder: Int)
 data class EstimateGroup(val id: String, val name: String, val description: String, val showPrice: Boolean)
-data class EstimateDetail(val id: String, val number: String, val invoiceNumber: String?, val customer: String, val email: String, val phone: String, val address: String, val projectDescription: String, val estimateState: String, val clientState: String?, val subtotal: Double, val discount: Double, val discountType: String, val tax: Double, val taxRate: Double, val total: Double, val validUntil: String, val contractor: String, val contractorAddress: String, val contractorPhone: String, val contractorEmail: String, val contractorWebsite: String, val lines: List<EstimateLine>, val groups: List<EstimateGroup>, val displayMode: String, val hidden: Set<String>, val showEstimate: Boolean, val showItemPrices: Boolean, val showGroupPrices: Boolean, val showSubtotal: Boolean, val showTax: Boolean, val showTotal: Boolean, val currentRevision: Int = 0, val collectionHold: Boolean = false, val history: List<EstimateHistory> = emptyList())
+data class EstimateDetail(val id: String, val number: String, val invoiceNumber: String?, val customer: String, val email: String, val phone: String, val address: String, val projectDescription: String, val estimateState: String, val clientState: String?, val subtotal: Double, val discount: Double, val discountType: String, val tax: Double, val taxRate: Double, val total: Double, val validUntil: String, val contractor: String, val contractorAddress: String, val contractorPhone: String, val contractorEmail: String, val contractorWebsite: String, val lines: List<EstimateLine>, val groups: List<EstimateGroup>, val displayMode: String, val hidden: Set<String>, val showEstimate: Boolean, val showItemPrices: Boolean, val showGroupPrices: Boolean, val showSubtotal: Boolean, val showTax: Boolean, val showTotal: Boolean, val currentRevision: Int = 0, val collectionHold: Boolean = false, val history: List<EstimateHistory> = emptyList(), val documentDate: String? = null, val customerViews: List<EstimateCustomerView> = emptyList())
 
 internal fun mapEstimateListItem(row: JSONObject) = EstimateListItem(
     id = row.opt("id").toString(), number = if (row.optString("estimateState") == "invoice") row.optString("invoiceNumber").ifBlank { "Number pending" } else row.optString("estimateNumber").ifBlank { "Number pending" },
@@ -246,7 +277,7 @@ internal fun draftPayload(draft: JSONObject): JSONObject {
     val rate = draft.opt("taxRate").toString().toBigDecimalOrNull()
     require(rate != null && rate >= java.math.BigDecimal.ZERO && rate <= java.math.BigDecimal(100)) { "Tax must be between 0 and 100." }
     val result = JSONObject()
-    listOf("customerName", "customerEmail", "projectDescription", "expectedUpdatedAt", "draftOnly", "creationRequestId", "customerId", "clientSnapshot", "customerPhone", "serviceAddress", "serviceAddress2", "serviceCity", "serviceState", "serviceZipCode").forEach {
+    listOf("customerName", "customerEmail", "projectDescription", "expectedUpdatedAt", "draftOnly", "creationRequestId", "customerId", "clientSnapshot", "companyContactAdditions", "customerPhone", "serviceAddress", "serviceAddress2", "serviceCity", "serviceState", "serviceZipCode").forEach {
         if (draft.has(it)) result.put(it, draft.get(it))
     }
     result.put("nativeAuthoring", true)
@@ -289,3 +320,5 @@ internal fun nativeAIReview(proposal:JSONObject,inventory:JSONObject):JSONObject
     }
     return JSONObject().put("collection",JSONObject().put("name",name).put("description",description).put("items",clean)).put("preview",preview)
 }
+
+data class EstimateCustomerView(val viewedAt: String, val matchesCurrent: Boolean?)

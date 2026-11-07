@@ -13,9 +13,17 @@ ANDROID = '{http://schemas.android.com/apk/res/android}'
 def main():
     source = (ROOT / 'app/build/generated/source/buildConfig/debug/pro/ezboss/mobile/BuildConfig.java').read_text()
     strings = dict((key, json.loads(value)) for key, value in re.findall(r'public static final String (\w+) = ("(?:\\.|[^"\\])*");', source))
-    public_auth = {key for key in strings if key.startswith('AUTH0_') or key.startswith('API_')}
-    if public_auth != {'AUTH0_DOMAIN', 'AUTH0_CLIENT_ID', 'AUTH0_AUDIENCE', 'API_BASE_URL'}:
-        raise ValueError('BuildConfig must expose only the four approved public identity/API settings')
+    public_auth = {key for key in strings if key.startswith(('AUTH0_', 'AUTH_', 'API_'))}
+    if public_auth != {'AUTH0_DOMAIN', 'AUTH0_CLIENT_ID', 'AUTH0_AUDIENCE', 'API_BASE_URL', 'AUTH_PROVIDER', 'AUTH_ORIGIN'}:
+        raise ValueError('BuildConfig must expose only the approved public identity/API settings')
+    if strings.get('AUTH_PROVIDER') not in ('auth0','better-auth'):
+        raise ValueError('Invalid auth provider')
+    if strings.get('AUTH_PROVIDER') == 'better-auth':
+        from urllib.parse import urlsplit
+        value = strings.get('AUTH_ORIGIN','')
+        origin = urlsplit(value)
+        if origin.scheme != 'https' or not origin.hostname or origin.username is not None or origin.password is not None or '?' in value or '#' in value or origin.path not in ('','/'):
+            raise ValueError('Invalid auth origin')
     manifest = ET.parse(ROOT / 'app/build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml').getroot()
     app = manifest.find('application')
     if app is None or app.get(ANDROID + 'usesCleartextTraffic') != 'false':

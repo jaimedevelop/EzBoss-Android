@@ -12,7 +12,7 @@ def require(condition, message):
 
 A = '{http://schemas.android.com/apk/res/android}'
 
-def validate_manifest(xml, package, domain, audience=None, api=None, client_id=None):
+def validate_manifest(xml, package, domain, audience=None, api=None, client_id=None, auth_provider="auth0", auth_origin=None):
     root = ET.fromstring(xml)
     require(root.get('package') == package, 'Unexpected package')
     app = root.find('application')
@@ -26,6 +26,16 @@ def validate_manifest(xml, package, domain, audience=None, api=None, client_id=N
             entry = app.find("meta-data[@" + A + "name='pro.ezboss.release." + name + "']")
             require(entry is not None and entry.get(A + 'value') == expected, 'Unexpected release ' + name)
     require(app.get(A + 'networkSecurityConfig') is None, 'Review network security config before release')
+    provider = app.find("meta-data[@" + A + "name='pro.ezboss.release.AUTH_PROVIDER']")
+    actual_provider = provider.get(A + 'value') if provider is not None else 'auth0'
+    require(actual_provider == auth_provider, 'Unexpected authentication provider')
+    require(actual_provider in ('auth0', 'better-auth'), 'Unknown authentication provider')
+    if actual_provider == 'better-auth':
+        from urllib.parse import urlsplit
+        entry = app.find("meta-data[@" + A + "name='pro.ezboss.release.AUTH_ORIGIN']")
+        require(entry is not None and auth_origin is not None and entry.get(A + 'value') == auth_origin, 'Unexpected auth origin')
+        origin = urlsplit(auth_origin)
+        require(origin.scheme == 'https' and bool(origin.hostname) and origin.username is None and origin.password is None and not origin.query and not origin.fragment and origin.path in ('','/'), 'Invalid auth origin')
     callback = False
     for component in app:
         if component.tag not in ('activity', 'activity-alias', 'provider', 'receiver', 'service'):
@@ -60,6 +70,8 @@ if __name__ == '__main__':
     parser.add_argument('--audience', required=True)
     parser.add_argument('--api-origin', required=True)
     parser.add_argument('--client-id', required=True)
+    parser.add_argument('--auth-provider', choices=['auth0','better-auth'], default='auth0')
+    parser.add_argument('--auth-origin')
     parser.add_argument('--apksigner', default='apksigner')
     parser.add_argument('--apkanalyzer', default='apkanalyzer')
     args = parser.parse_args()
@@ -69,5 +81,5 @@ if __name__ == '__main__':
     digests = re.findall(r'Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F:]+)', verification)
     require(len(digests) == 1 and digests[0].replace(':', '').lower() == args.certificate_sha256.replace(':', '').lower(), 'Unexpected signing certificate')
     manifest = subprocess.check_output([args.apkanalyzer, 'manifest', 'print', str(args.apk)])
-    validate_manifest(manifest, args.package, args.auth0_domain, args.audience, args.api_origin, args.client_id)
+    validate_manifest(manifest, args.package, args.auth0_domain, args.audience, args.api_origin, args.client_id, args.auth_provider, args.auth_origin)
     print('PASS signed APK manifest; sha256=' + hashlib.sha256(args.apk.read_bytes()).hexdigest())

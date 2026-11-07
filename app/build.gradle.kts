@@ -13,6 +13,8 @@ val localAuthProperties = Properties().apply {
     val localFile = rootProject.file("local.properties")
     if (localFile.isFile) localFile.inputStream().use { load(it) }
 }
+val selectedAuthProvider = providers.gradleProperty("authProvider").orNull ?: localAuthProperties.getProperty("authProvider", "auth0")
+val selectedAuthOrigin = (providers.gradleProperty("authOrigin").orNull ?: localAuthProperties.getProperty("authOrigin", "")).trim()
 val stagingBuild = providers.gradleProperty("stagingBuild").orNull == "true"
 val authPropertyNames = listOf("auth0Domain", "auth0ClientId", "auth0Audience", "apiBaseUrl")
 val authProperties = authPropertyNames.associateWith { name ->
@@ -33,6 +35,8 @@ val validateAuthConfiguration = tasks.register("validateAuthConfiguration") {
     group = "verification"
     description = "Rejects builds missing the configuration required for sign-in."
     doLast {
+        check(selectedAuthProvider in listOf("auth0", "better-auth")) { "Invalid authProvider" }
+        if(selectedAuthProvider == "better-auth")check(runCatching { val uri=URI(selectedAuthOrigin); uri.scheme=="https" && !uri.host.isNullOrBlank() && uri.rawUserInfo==null && uri.rawQuery==null && uri.rawFragment==null && uri.path.orEmpty() in listOf("", "/") }.getOrDefault(false)) { "Invalid authOrigin" }
         val forbidden = forbiddenAuthProperties.filter { name ->
             !(providers.gradleProperty(name).orNull ?: localAuthProperties.getProperty(name)).isNullOrBlank()
         }
@@ -69,10 +73,14 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
+        buildConfigField("String", "AUTH_PROVIDER", quoted(selectedAuthProvider))
+        buildConfigField("String", "AUTH_ORIGIN", quoted(selectedAuthOrigin))
         buildConfigField("String", "AUTH0_DOMAIN", quoted(authProperty("auth0Domain")))
         buildConfigField("String", "AUTH0_CLIENT_ID", quoted(authProperty("auth0ClientId")))
         buildConfigField("String", "AUTH0_AUDIENCE", quoted(authProperty("auth0Audience")))
         buildConfigField("String", "API_BASE_URL", quoted(authProperty("apiBaseUrl")))
+        manifestPlaceholders["authProvider"] = selectedAuthProvider
+        manifestPlaceholders["authOrigin"] = selectedAuthOrigin
         manifestPlaceholders["appLabel"] = if (stagingBuild) "EzBoss Staging" else "EzBoss"
         manifestPlaceholders["auth0Domain"] = authProperty("auth0Domain")
         manifestPlaceholders["releaseAuth0Audience"] = authProperty("auth0Audience")
@@ -111,7 +119,7 @@ dependencies {
 tasks.matching { it.name == "packageRelease" }.configureEach {
     doFirst {
         check(!stagingBuild) { "Distribution release cannot use staging identity." }
-        val releasePolicyProperties = listOf("releaseSigningCertificateSha256", "releaseExpectedAuth0Domain", "releaseExpectedAudience", "releaseExpectedApiOrigin", "releaseExpectedClientId")
+        val releasePolicyProperties = (if(selectedAuthProvider == "better-auth") listOf("releaseExpectedAuthProvider", "releaseExpectedAuthOrigin") else emptyList()) + listOf("releaseSigningCertificateSha256", "releaseExpectedAuth0Domain", "releaseExpectedAudience", "releaseExpectedApiOrigin", "releaseExpectedClientId")
         check(releasePolicyProperties.all { !providers.gradleProperty(it).orNull.isNullOrBlank() }) {
             "Set the independently approved release signing/identity policy properties: ${releasePolicyProperties.joinToString()}."
         }
@@ -126,6 +134,8 @@ tasks.matching { it.name == "packageRelease" }.configureEach {
                     "--certificate-sha256", providers.gradleProperty("releaseSigningCertificateSha256").get(),
                     "--audience", providers.gradleProperty("releaseExpectedAudience").get(), "--api-origin", providers.gradleProperty("releaseExpectedApiOrigin").get(),
                     "--client-id", providers.gradleProperty("releaseExpectedClientId").get(),
+                    "--auth-provider", providers.gradleProperty("releaseExpectedAuthProvider").orNull ?: "auth0",
+                    "--auth-origin", providers.gradleProperty("releaseExpectedAuthOrigin").orNull ?: "",
                     "--apksigner", android.sdkDirectory.resolve("build-tools/${android.buildToolsVersion}/apksigner"),
                     "--apkanalyzer", android.sdkDirectory.resolve("cmdline-tools/latest/bin/apkanalyzer"))
             }

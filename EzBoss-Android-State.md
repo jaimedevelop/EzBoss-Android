@@ -1,5 +1,72 @@
 # EzBoss Android State
 
+## Immediate company contact saves (November 7, 2026)
+
+- The Add action in the document contact dialog now appends to the saved company immediately through `POST /clients/:id/contacts`, including before estimate creation. `Estimates.kt`, `data/ApiClient.kt` and `MainActivity.kt` await confirmation and preserve the form on failure. iOS and responsive web use the same endpoint. Existing queued additions remain supported by document saves.
+- Configuration is unchanged. Offline Android debug assembly and JVM tests, the unsigned iOS simulator-target build, web production build and targeted API/web regressions passed. The append was also verified against PostgreSQL and read back through the People handler. No simulator/emulator was started. Safari UI acceptance remains unavailable because computer access was denied. Standalone web TypeScript checking still reports missing Firebase modules in existing legacy files.
+
+## Company contacts from estimates and invoices (November 6, 2026)
+
+- `Estimates.kt` queues new contacts for the selected company in the document editor and confirms the append with a temporary message. `data/ApiClient.kt` sends queued additions with the document save. The shared API appends only new entries to the saved company profile in the same transaction. iOS and responsive web use the same contract.
+- No configuration changes. The isolated offline Android debug build and JVM tests passed, and the unsigned iOS simulator-target build passed. No simulator or emulator was started. Authenticated UI acceptance on devices remains pending.
+
+## Client View document dates (November 6, 2026)
+
+- `data/ApiClient.kt` and `Estimates.kt` show the saved estimate or invoice date in the native preview, with the creation timestamp as a fallback. The shared web preview and PDF use the same date source. iOS opens the shared customer view through its existing link.
+- Configuration is unchanged. The web production build and customer DTO tests passed. Android build and JVM tests are pending because the sandbox denied access to the Gradle wrapper lock. No emulator or simulator was started.
+
+## Better Auth credential integration (November 4, 2026)
+
+- Opt-in public `authProvider=better-auth`/`authOrigin` selects custom Compose password/signup/verification/recovery-request/TOTP-or-backup-code forms and a separate Keystore/AES-GCM store. Default builds retain Auth0. Only a complete signed session matching the returned user and an active, unexpired authoritative session is persisted. Intermediate cookies are transient; generation checks reject late HTTP cookie/credential saves. Restoration outages and locked-device access retain credentials.
+- `AuthRepository.kt`, `BetterAuthClient.kt`, `SecureCredentialStore.kt`, `AuthConfiguration.kt`, `AuthState.kt`, `MainActivity.kt`, `data/ApiClient.kt`, `auth/ui/NativeIdentityScreen.kt`: distinguish identity discovery from active company access; new identities keep their credential and can create a contractor company or continue an invitation on the web. Company selection uses stable internal IDs. iOS has corresponding SwiftUI/Keychain/discovery/setup behavior; desktop/mobile web share React journeys and cookie transport.
+- Build/manifest/release scripts validate explicit provider/origin settings while retaining exact legacy callbacks, signing/export/cleartext/backup restrictions. Public fixtures are not real provider configuration.
+- Verified opt-in debug assembly and JVM tests with cached Gradle 8.13/Adoptium 21; `scripts/check-config.py` and 5 release-policy tests pass. Logs are copied into shared Better Auth evidence. No emulator/simulator was started or app installed.
+- Pending: native Google/browser OAuth and API resource-token verification, native invitation/reset associations, full native security enrollment/recovery/admin handoff, strong shared enrollment/removal policy, real provider/device/signed acceptance and nine-account migration/cutover. Auth0 runtime/package retirement has not occurred.
+
+## Estimate dashboard tabs (November 4, 2026)
+
+- `Estimates.kt`, `EstimateContracts.kt`: pinned horizontal Material tabs above actions, matching web order; Invoice label and change-order exclusion preserved. History is now separate from estimate details; Timeline shows the available validity date. Client View retains its preview and adds customer-link access; Payments offers customer checkout. All tabs can be selected; Change Orders, Payments records, milestone scheduling and Communication explicitly direct users to the web app because those native features remain unavailable.
+- iOS `BusinessViews.swift`: matching top tab order, separate history/timeline, existing estimate editor/actions retained, customer-link preparation in Client View/Payments. iOS uses the actual customer link rather than adding an unverified local customer preview. Web desktop/mobile already have separate tabs and were inspected without changes.
+- Verification: unsigned iOS simulator-target compilation passed (`/tmp/ezboss-tabs-ios.log`). Android debug assembly and JVM tests passed (`/tmp/ezboss-tabs-android.log`), including tab order/availability contract. No simulator/emulator launched. TODO: authenticated phone visual/accessibility acceptance; remaining web-only features above.
+
+## Dashboard shortcuts (November 4, 2026)
+
+- `Dashboard.kt`: only Estimates and Work Orders shortcuts, in that order, stacked as full-width rectangular actions with existing permission checks and navigation. Existing summary panels remain. Android already uses `profile.firstName` before the account display name and has no dashboard title in the top bar; iOS now also loads that profile name and removes its dashboard navigation title.
+- Verification: iOS unsigned simulator-target build passed (`/tmp/ezboss-dashboard-ios.log`). Android debug assembly and existing JVM tests passed (`/tmp/ezboss-dashboard-android.log`). No simulator/emulator started. Remaining: authenticated visual acceptance on devices.
+
+## Welcome page web styling (November 4, 2026)
+
+- `MainActivity.kt`: keeps the logo with welcome content by removing the flexible gap; adopts the web landing page’s charcoal/orange palette, contractor eyebrow, bold “Less tedious estimates. More building.” headline and supporting copy. Existing auth actions and error/busy handling remain.
+- Verification: offline JDK 21 debug assembly passed (`/tmp/ezboss-landing-refresh-android.log`); corresponding iOS simulator-target build passed, with a named logo image asset. No simulator/emulator launched. Phone visual and enlarged-text acceptance remain pending.
+
+## Popup-free sign-out (November 4, 2026)
+
+- `auth/AuthRepository.kt` clears device credentials through the existing non-cancellable credential gate without launching Auth0 browser logout. `MainActivity.kt` uses the activity-free sign-out call and retains immediate session invalidation. Login/signup explicitly requests `prompt=login` so a retained browser session cannot silently restore the signed-out account. Browser SSO cookies and server tokens are not revoked by local sign-out.
+- Verification: offline Gradle 8.13/JDK 21 debug assembly and JVM tests passed; `/tmp/ezboss-signout-android.log`. iOS unsigned simulator-target build and 42 core tests passed, including local logout/restoration regression. No simulator/emulator started. TODO: live device sign-out/relaunch/sign-in acceptance against Auth0.
+
+## Launcher icon (November 4, 2026)
+
+- `app/src/main/AndroidManifest.xml` now selects the EzBoss logo launcher/round icon. `res/mipmap-*/ic_launcher.png` supplies legacy density variants; `mipmap-anydpi-v26/ic_launcher.xml`, `drawable-nodpi/ic_launcher_foreground.png` and `values/icon_colors.xml` supply adaptive launcher masks with a white background. Artwork uses the existing web EzBoss logo.
+- Verification: offline Gradle 8.13/JDK 21 `:app:assembleDebug` passed (`/tmp/ezboss-icon-android.log`); iOS unsigned generic-device build also passed. No simulator/emulator started or device installed. Remaining: home-screen visual acceptance on devices.
+
+## Native welcome redesign (November 4, 2026)
+
+- `MainActivity.kt`: actual bundled EzBoss logo at the top; bottom welcome message, dark-orange Sign In and outlined Create Account actions on a warm neutral canvas. Uses the app's orange/navy palette, compact corners, safe-area padding and scrollable minimum-height layout for small screens/enlarged text. Existing error/retry/session-expiry and busy behavior remains.
+- `auth/AuthRepository.kt`: Create Account passes Auth0 `screen_hint=signup`; successful authentication follows the existing API identity/company selection path. No callback, client identity or API configuration changes.
+- Verification: JDK 21/Gradle 8.13 offline debug assembly and 34 JVM tests passed (zero failures); `/tmp/ezboss-welcome-android.log`. iOS equivalent also compiles and its 42 core tests pass. No simulator/emulator started. TODO: native visual/accessibility acceptance on phones and live tenant signup/provider acceptance.
+
+## Startup-only reveal and page skeletons (November 2, 2026)
+
+- `EzBossLoading.kt` now ties the letter/border reveal and 320 ms page fade to authentication readiness, once per startup/sign-in. Ordinary tab/company changes and page/action loading no longer trigger completion overlays or delays. The host rearms after sign-out/session expiry, preserves reduced-motion handling and blocks interaction only during startup completion.
+- Page indicators use static heading/row skeletons. Explicit startup, compact sign-in and pagination indicators retain the solid revolving-border logo. `MainActivity.kt` supplies authentication state to the host; `Dashboard.kt` lets panel skeletons occupy available width.
+- Verification: offline Gradle 8.13/JDK21 debug assembly passed (`/tmp/ezboss-startup-android.log`). Shared web production/type checks and generic-device unsigned iOS build passed. Browser regression confirmed startup-only reveal and immediate tab readiness. No simulator/emulator started. Native visual/device acceptance remains pending; no deployment/install performed.
+
+## Branded loading animations (November 2, 2026)
+
+- `EzBossLoading.kt` adds the actual EzBoss stencil mark with a solid, sharp-ended 32% double-border snake (2.8-second clockwise lap). Existing indicators in `MainActivity.kt`, `Dashboard.kt`, `Estimates.kt`, `Operations.kt`, `BusinessRecords.kt` and `PeopleSettings.kt` use it. The bundled transparent `drawable-nodpi/ezboss_loading.png` is derived from the existing web logo.
+- The root loading host tracks overlapping page loaders. When the last one disappears, a white completion screen shows six staggered letter fades and a fading left-to-right border, finishing together at about 1.26 seconds, then fades the cover away over 320 ms starting at 1.42 seconds, bringing the page into view and releasing interaction at about 1.74 seconds. The pending completion screen covers the initial destination frame; touch input and underlying accessibility content are blocked during the reveal. Sign-in button and pagination indicators do not trigger that screen. System disabled-animation preferences skip motion/reveal.
+- Verification: cached Gradle 8.13/JDK21 offline `:app:assembleDebug :app:testDebugUnitTest` passed, 34 tests with zero failures/errors. Outputs use the existing isolated `/tmp/ezboss-w3-android-output` init script; log `/tmp/ezboss-loading-android.log`. The follow-up 320 ms page fade also passed debug assembly (`/tmp/ezboss-fade-android.log`). No emulator/simulator started. Remaining: visual/device acceptance, including navigation, slow/error requests, interrupted loading, accessibility and system animation preferences. No install, signing or deployment performed.
+
 ## Seven-gap release enforcement (November 2, 2026)
 
 - `scripts/check-release.py` is the canonical signed-APK policy; root workspace tooling delegates to it. Validation uses unconditional errors even under `python -O`. Checks include an independently approved signing certificate and callback/build identity, backup/debug/test/cleartext policy, exported components and network overrides. Public audience/API/client identity metadata is added to the merged manifest for artifact comparison; no server secret is introduced.
@@ -238,3 +305,13 @@ Auth0 dashboard setup: create a **Native** application with package `pro.ezboss.
 - Canonical `EzBoss-Android` JVM tests passed: **34 tests, zero failures/errors/skips**, using cached Gradle 8.13 and Adoptium JDK 21. Log: `/tmp/ezboss-gap-android-tests.log`. No Android source/configuration changes were made by the Firebase-gap task; unrelated ongoing changes were preserved.
 - The second root scaffold explicitly rejects builds as archived in root `settings.gradle.kts`; it is not an additional supported release target. Its attempted test run stopped at that guard (`/tmp/ezboss-gap-root-android-tests.log`).
 - No emulator/device session or ADB discovery was started. These JVM results do not establish live provider login, customer-file viewing, permissions on hardware or production cutover acceptance. Those remain in the Firebase exit runbook; this task was explicitly limited to local tooling/tests.
+
+## Dashboard document performance (2026-11-04)
+- `Dashboard.kt` requests `/estimates?summary=true`, matching web/mobile browser and iOS in omitting unused line-item search text. Payment data and the full document set remain available for Android/web period filtering and balance calculations; iOS requests its five displayed rows with pagination.
+- Shared API adds an active owner/recent-order index in migration `119_estimate_recent_list.sql`; deployment/migration and real-device timing are pending.
+- Verification: API build and summary/default-list regression tests passed. Android compilation attempted but blocked by sandbox write access to the Gradle wrapper cache; no emulator started.
+
+## Customer view history (November 6, 2026)
+
+- `Estimates.kt` and `data/ApiClient.kt` display timestamped customer visits under Viewed by Customer, with the current version status and a 10-second refresh while Timeline is selected. Shared API migration 122 adds versioned visits. No Android configuration changes.
+- Verified isolated offline debug assembly and JVM tests. The unsigned iOS simulator-target build passed. No simulator or emulator was launched. Authenticated device acceptance is pending.

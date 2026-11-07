@@ -29,23 +29,46 @@ data class SessionCredentials(val accessToken: String) {
 }
 
 class AuthRepository(context: Context, private val config: AuthConfiguration) {
+    val usesBetterAuth get() = config.provider == "better-auth"
+    private val native = if (usesBetterAuth && config.ready) BetterAuthClient(config.authOrigin) else null
+    private val secure = if (usesBetterAuth) SecureCredentialStore(context.applicationContext) else null
+    suspend fun nativeRequest(path: String, body: org.json.JSONObject? = null) = native!!.request(path, body).data
+    suspend fun nativeSignIn(email: String, password: String, code: String? = null, backup: Boolean = false): Boolean {
+        val client = native ?: throw MissingAuthConfiguration()
+        if (code == null) { clearCredentials() }
+        val response = if (code == null) client.request("/sign-in/email", org.json.JSONObject().put("email", email).put("password", password))
+            else client.request(if (backup) "/two-factor/verify-backup-code" else "/two-factor/verify-totp", org.json.JSONObject().put("code", code).put("trustDevice", false))
+        if (response.data.optBoolean("twoFactorRedirect")) return false
+        val token = response.signedToken ?: throw NativeAuthException(401)
+        val validatedUser=client.validate(token)
+        if(response.data.optJSONObject("user")?.optString("id")!=validatedUser)throw NativeAuthException(401)
+        credentialGate.run {
+            currentCoroutineContext().ensureActive()
+            check(client.current(response.generation)) { "Session changed" }
+            secure!!.write(token)
+        }
+        client.cancelFlow() // Drop intermediate cookies only after complete validated storage.
+        return true
+    }
     private val credentialGate = CredentialGate()
-    private val account = if (config.ready) Auth0.getInstance(config.clientId, config.domain) else null
+    private val account = if (config.ready && !usesBetterAuth) Auth0.getInstance(config.clientId, config.domain) else null
     private val manager: SecureCredentialsManager? = account?.let {
         SecureCredentialsManager(AuthenticationAPIClient(it), context.applicationContext, SharedPreferencesStorage(context.applicationContext))
     }
 
     private fun requireConfigured() {
-        if (manager == null) throw MissingAuthConfiguration()
+        if (!config.ready || (!usesBetterAuth && manager == null)) throw MissingAuthConfiguration()
     }
 
-    suspend fun login(activity: Activity): SessionCredentials {
+    suspend fun login(activity: Activity, createAccount: Boolean = false): SessionCredentials {
         requireConfigured()
+        check(!usesBetterAuth) { "Use the native credentials form" }
         val credentials = suspendCancellableCoroutine<Credentials> { continuation ->
             WebAuthProvider.login(account!!)
                 .withScheme(BuildConfig.APPLICATION_ID)
                 .withAudience(config.audience)
                 .withScope("openid profile email offline_access")
+                .withParameters(if (createAccount) mapOf("screen_hint" to "signup", "prompt" to "login") else mapOf("prompt" to "login"))
                 .start(activity, object : Callback<Credentials, AuthenticationException> {
                     override fun onSuccess(result: Credentials) {
                         if (continuation.isActive) continuation.resume(result)
@@ -65,6 +88,11 @@ class AuthRepository(context: Context, private val config: AuthConfiguration) {
 
     suspend fun restore(): SessionCredentials? = credentialGate.run {
         requireConfigured()
+        if (usesBetterAuth) {
+            val token = secure!!.read() ?: return@run null
+            try { native!!.validate(token) } catch(e:NativeAuthException) { if(e.status==401)secure.clear();throw e }
+            return@run SessionCredentials(token)
+        }
         if (!manager!!.hasValidCredentials()) {
             manager.clearCredentials()
             return@run null
@@ -76,7 +104,10 @@ class AuthRepository(context: Context, private val config: AuthConfiguration) {
 
     suspend fun accessToken(): String = credentialGate.run {
         requireConfigured()
-        readCredentials().accessToken
+        if (usesBetterAuth) {
+            val token = secure!!.read() ?: throw NativeAuthException(401)
+            native!!.validate(token); token
+        } else readCredentials().accessToken
     }
 
     // Wait for the SDK callback even if the caller is cancelled: renewal persists
@@ -89,24 +120,18 @@ class AuthRepository(context: Context, private val config: AuthConfiguration) {
     }
 
     suspend fun clearCredentials() = withContext(NonCancellable) {
-        credentialGate.run { manager?.clearCredentials(); Unit }
+        credentialGate.run { native?.cancelFlow(); secure?.clear(); manager?.clearCredentials(); Unit }
     }
 
-    suspend fun signOut(activity: Activity) {
-        if (manager == null || account == null) throw MissingAuthConfiguration()
-        // Clear local tokens even if the browser logout is cancelled or unavailable.
-        clearCredentials()
-        suspendCancellableCoroutine<Unit> { continuation ->
-            WebAuthProvider.logout(account)
-                .withScheme(BuildConfig.APPLICATION_ID)
-                .start(activity, object : Callback<Void?, com.auth0.android.authentication.AuthenticationException> {
-                override fun onSuccess(result: Void?) { if (continuation.isActive) continuation.resume(Unit) }
-                override fun onFailure(error: com.auth0.android.authentication.AuthenticationException) {
-                    if (continuation.isActive) continuation.resumeWithException(error)
-                }
-            })
-        }
+    // App sign-out never opens a browser. The next login explicitly authenticates.
+    suspend fun signOut() {
+        requireConfigured()
+        if (usesBetterAuth) {
+            val token = credentialGate.run { runCatching { secure!!.read() }.getOrNull() }
+            clearCredentials()
+            if (token != null) try { native!!.request("/sign-out", org.json.JSONObject(), token) } catch (_: NativeAuthException) { }
+        } else clearCredentials()
     }
 }
 
-fun authConfiguration() = AuthConfiguration(BuildConfig.AUTH0_DOMAIN, BuildConfig.AUTH0_CLIENT_ID, BuildConfig.AUTH0_AUDIENCE, BuildConfig.API_BASE_URL)
+fun authConfiguration() = AuthConfiguration(BuildConfig.AUTH0_DOMAIN, BuildConfig.AUTH0_CLIENT_ID, BuildConfig.AUTH0_AUDIENCE, BuildConfig.API_BASE_URL, BuildConfig.AUTH_PROVIDER, BuildConfig.AUTH_ORIGIN)

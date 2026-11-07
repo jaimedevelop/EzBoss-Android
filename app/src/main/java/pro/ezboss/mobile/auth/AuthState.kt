@@ -5,6 +5,7 @@ import pro.ezboss.mobile.data.Account
 sealed interface AuthState {
     data object Loading : AuthState
     data object SignedOut : AuthState
+    data object PendingAccount : AuthState
     data class CompanySelection(val account: Account) : AuthState
     data class Authenticated(val account: Account) : AuthState
     data class Error(

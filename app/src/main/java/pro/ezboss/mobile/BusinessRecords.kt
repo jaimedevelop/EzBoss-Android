@@ -44,7 +44,7 @@ private val addressKeys=listOf("address","address2","city","state","zipCode")
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
         PageHeading(if(project) "Projects" else "Finances", if(project) "Projects, clients and progress" else "Records and linked payment summaries")
-        if(busy)CircularProgressIndicator()
+        if(busy)EzBossLoadingIndicator()
         error?.let{Text(it,color=MaterialTheme.colorScheme.error)};message?.let{Text(it)}
         if(selected==null) {
             TextButton(onClick={reload++},enabled=!busy){Text("Refresh / retry")}

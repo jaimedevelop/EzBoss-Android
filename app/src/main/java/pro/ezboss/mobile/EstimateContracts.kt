@@ -5,11 +5,11 @@ data class EstimateTabContract(val label: String, val enabled: Boolean)
 internal fun estimateDashboardTabs(isChangeOrder: Boolean): List<EstimateTabContract> = buildList {
     add(EstimateTabContract("Estimate", true))
     add(EstimateTabContract("Client View", true))
-    if (!isChangeOrder) add(EstimateTabContract("Change Orders", false))
-    add(EstimateTabContract("Payments", false))
-    add(EstimateTabContract("Timeline", false))
-    add(EstimateTabContract("Communication", false))
-    add(EstimateTabContract("History", false))
+    if (!isChangeOrder) add(EstimateTabContract("Change Orders", true))
+    add(EstimateTabContract("Payments", true))
+    add(EstimateTabContract("Timeline", true))
+    add(EstimateTabContract("Communication", true))
+    add(EstimateTabContract("History", true))
 }
 
 internal fun estimateStateQuery(label: String): String? = when (label) {
