@@ -1,5 +1,57 @@
 # EzBoss Android State
 
+## Sidebar icon playback (November 10, 2026)
+
+- `MainActivity.kt` and `InventoryPackingIcon.kt` start Inventory playback on row hover or activation. Leaving the row resets hover-only playback. Activating the row navigates immediately and closes the drawer when the icon finishes. Opening the drawer leaves the icon idle. No configuration changes.
+- Android debug assembly and JVM tests, the iOS simulator-target build, and desktop and phone-width browser playback checks passed. Native interaction testing remains pending. No simulator or emulator was started.
+
+## Inventory navigation animation (November 10, 2026)
+
+- `InventoryPackingIcon.kt` and `MainActivity.kt` play the straight-sided, 2.43-second packing sequence when the navigation drawer opens. The box opens, receives the small parcel, closes, and ships out. Inventory selection remains immediate, and Compose respects the system animator setting. iOS and mobile web play on drawer open. Desktop web plays on hover or keyboard focus. No configuration changes.
+- Android debug assembly and all 36 JVM tests passed. The iOS simulator-target build and web production build passed. Browser checks passed at desktop and phone widths. Native on-device playback remains unverified. No simulator or emulator was started.
+
+## Claims sidebar order (November 10, 2026)
+
+- `MainActivity.kt` places Claims directly after Work Orders in the drawer, matching iOS and desktop and mobile web. Existing access checks and routes apply. No configuration changes.
+- Android debug assembly and JVM tests passed, as did the iOS simulator-target build, web production build, and sidebar browser checks at desktop and phone widths. Native visual verification remains pending. No simulator or emulator was started.
+
+## Claims list spacing (November 10, 2026)
+
+- `Estimates.kt` uses the shared 16 dp page and card padding and 12 dp gap for the Claims list and job picker. The iOS Claims and Estimates screens already share the same system list insets. No configuration changes.
+- Android debug assembly and JVM tests passed. Native visual verification remains pending. No simulator or emulator was started.
+
+## Claims page header (November 10, 2026)
+
+- `Estimates.kt` uses the shared orange page heading for Claims and labels the estimate picker action “New Claim.” iOS uses its shared workspace header, and desktop and mobile web use the Estimates header component. No configuration changes.
+- Android debug assembly and JVM tests, the iOS simulator-target build, and the web production build passed. Browser checks with mocked data passed at 320, 390, 768 and 1280 px, including the picker flow and read-only permissions. Native visual verification remains pending. No simulator or emulator was started.
+
+## Standalone Claims workspace (November 10, 2026)
+
+- `MainActivity.kt` adds Claims to company navigation under the existing estimate permissions. `Estimates.kt` adds searchable job histories, an active-estimate picker for a first callback, and links between Claims and the document tab. Existing histories accept new callbacks after their documents are deleted.
+- The shared API groups linked estimate and invoice records and retains company-owned job snapshots and visits through migration `125_claims_workspace.sql`. No Android configuration changes.
+- Android debug assembly and 36 JVM tests passed. iOS simulator-target compilation, desktop and phone-width browser checks, the full local PostgreSQL migration chain, and the permanent-deletion regression passed. No simulator or emulator was started. Deployment and authenticated device acceptance remain pending.
+
+## Estimate Claims (November 10, 2026)
+
+- `Estimates.kt` and `EstimateContracts.kt` add Claims ahead of Communication and History. Each return visit has its own name, location, issue description, optional repair notes, and automatic logged date. `MainActivity.kt` passes the existing estimate write grant for the Add claim action.
+- Android, iOS, and responsive web use the same company-scoped list and create endpoints. Migration `124_estimate_claims.sql` stores the entries. No client configuration changes.
+- Isolated Android debug assembly and 36 JVM tests passed. The unsigned iOS simulator-target build, desktop and phone-width browser checks, and local PostgreSQL claims regression passed. No simulator or emulator was started. Deployment and authenticated native device acceptance remain pending.
+
+## Projects lifecycle and linked records (November 10, 2026)
+
+- `BusinessRecords.kt` supports archived project browsing, versioned archive and restore, guarded deletion, retry-safe creation, client site defaults and editing for type, actual end, tags and explicit progress. `MainActivity.kt`, `Estimates.kt`, `Operations.kt` and `data/ApiClient.kt` open project-scoped documents, work orders and purchases. Project estimate drafts use the API-provided client and site and open the existing editor.
+- Offline Android debug assembly and JVM tests passed. The iOS simulator-target build, web build and targeted PostgreSQL tests passed. No simulator or emulator was started. Authenticated native acceptance, client backlinks, phases and manager editing, standalone operational links and later plan phases remain pending.
+
+## Projects list summary removal (November 9, 2026)
+
+- `BusinessRecords.kt` opens the Projects list with search and status filters. The company summary has been removed from Android, iOS and responsive web. Project budgets still appear in the native Overview and web project rows. No API or configuration changes.
+- Android debug assembly and JVM tests passed. The iOS simulator-target build, web production build and browser checks at 390 px and 1280 px passed. Native visual acceptance remains pending. No simulator or emulator was started.
+
+## Projects foundation (November 9, 2026)
+
+- `BusinessRecords.kt` uses the shared `GET /projects/list` endpoint for 25-row pages, company summary figures, literal name/number/client search and all six statuses. Project rows open a server-backed Overview. `MainActivity.kt` passes the Projects write grant to the separate create and edit actions. Client data loads when opening the editor.
+- No configuration changes. Android debug assembly and JVM tests passed. API tests passed against a disposable PostgreSQL cluster, and the unsigned iOS simulator-target build passed. No simulator or emulator was started. Authenticated device acceptance, create retry, archive and expanded Overview editing remain pending.
+
 ## Immediate company contact saves (November 7, 2026)
 
 - The Add action in the document contact dialog now appends to the saved company immediately through `POST /clients/:id/contacts`, including before estimate creation. `Estimates.kt`, `data/ApiClient.kt` and `MainActivity.kt` await confirmation and preserve the form on failure. iOS and responsive web use the same endpoint. Existing queued additions remain supported by document saves.

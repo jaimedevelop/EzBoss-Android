@@ -1,5 +1,6 @@
 package pro.ezboss.mobile
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
@@ -7,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import pro.ezboss.mobile.ui.theme.*
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.*
@@ -42,10 +44,10 @@ private val clientStates = listOf("Any", "Sent", "Viewed", "Accepted", "Denied",
 private fun money(value: Double) = NumberFormat.getCurrencyInstance(Locale.US).format(value)
 private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
 
-@Composable fun EstimatesListScreen(model: AuthViewModel, initialFilter: String = "All", onOpen: (String) -> Unit) {
-    var creating by remember { mutableStateOf(false) }
+@Composable fun EstimatesListScreen(model: AuthViewModel, initialFilter: String = "All", projectId: String? = null, canCreateProjectDraft: Boolean = false, onOpen: (String) -> Unit) {
+    var creating by rememberSaveable(projectId) { mutableStateOf(false) }
     if (creating) {
-        DraftEditorScreen(model, null, onClose = { creating = false }, onSaved = { creating = false; onOpen(it) })
+        DraftEditorScreen(model, null, onClose = { creating = false }, onSaved = { creating = false; onOpen(it) }, projectId = projectId)
         return
     }
     var search by rememberSaveable { mutableStateOf("") }
@@ -68,7 +70,7 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
         if (reset) { loading = true; error = null; denied = false } else loadingMore = true
         scope.launch {
             try {
-                val page = model.estimatePage(search, estimateStateQuery(estimateFilter), clientStateQuery(clientFilter), offset)
+                val page = model.estimatePage(search, estimateStateQuery(estimateFilter), clientStateQuery(clientFilter), offset, projectId)
                 if (requestGeneration == generation) {
                     rows = if (reset) page.items else rows + page.items
                     canLoadMore = page.canLoadMore
@@ -91,8 +93,10 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
     LaunchedEffect(Unit) { load(true) }
 
     Column(Modifier.fillMaxSize().background(EzBossDesign.Canvas)) {
-        PageHeading("Estimates", "Manage your estimates and invoices.")
-        TextButton(onClick = { creating = true }) { Text("Create estimate draft") }
+        PageHeading(if (projectId == null) "Estimates" else "Project documents", "Estimates, invoices and change orders")
+        if (projectId == null || canCreateProjectDraft) {
+            TextButton(onClick = { creating = true }) { Text("Create estimate draft") }
+        }
         Row(Modifier.fillMaxWidth().padding(EzBossDesign.PagePadding), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = search, onValueChange = { search = it; criteriaChanged() },
@@ -153,7 +157,7 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
 
 @Composable private fun StateMessage(title: String, message: String, action: String?, onAction: () -> Unit) { Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 18.sp); Spacer(Modifier.height(8.dp)); Text(message, color = EzBossDesign.Muted); if (action != null) { Spacer(Modifier.height(12.dp)); Button(onClick = onAction) { Text(action) } } } }
 
-@Composable fun EstimateDetailScreen(model: AuthViewModel, id: String, onReturn: () -> Unit) {
+@Composable fun EstimateDetailScreen(model: AuthViewModel, id: String, canWriteEstimates: Boolean, initialClaims: Boolean, onOpenClaimJob: (Int) -> Unit, onReturn: () -> Unit) {
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
     var approvalOpen by remember { mutableStateOf(false) }
@@ -186,7 +190,7 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
     var estimate by remember(id) { mutableStateOf<EstimateDetail?>(null) }
     var error by remember(id) { mutableStateOf<String?>(null) }
     var denied by remember(id) { mutableStateOf(false) }
-    var tab by rememberSaveable(id) { mutableStateOf("Estimate") }
+    var tab by rememberSaveable(id) { mutableStateOf(if (initialClaims) "Claims" else "Estimate") }
     var loading by remember(id) { mutableStateOf(true) }
     LaunchedEffect(id, retry) {
         loading = true; error = null
@@ -245,6 +249,7 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
             when (tab) {
                 "Estimate" -> EstimateInformation(value)
                 "Client View" -> ClientPreview(value)
+                "Claims" -> EstimateClaimsTab(model, "estimates/${value.id}/claims", canWriteEstimates, onOpenJob = onOpenClaimJob)
                 else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     DetailSection(tab) {
                         when (tab) {
@@ -291,6 +296,296 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
         act("record-approval", JSONObject().put("expectedRevision", estimate?.currentRevision).put("approverName", approver).put("reason", reason).put("approvalDate", approvalDate))
     }, enabled = approver.isNotBlank() && reason.isNotBlank() && approvalDate.isNotBlank()) { Text("Record approval") } }, dismissButton = { TextButton(onClick = { approvalOpen = false }) { Text("Cancel") } })
     if (revokeWarning) AlertDialog(onDismissRequest = { revokeWarning = false }, title = { Text("Revoke customer links?") }, confirmButton = { TextButton(onClick = { revokeWarning = false; act("revoke-links") }) { Text("Revoke links") } }, dismissButton = { TextButton(onClick = { revokeWarning = false }) { Text("Cancel") } })
+}
+
+private data class ClaimJobRow(
+    val id: Int,
+    val documentId: Int?,
+    val title: String,
+    val details: String,
+    val claimCount: Int,
+    val lastClaimAt: String,
+) {
+    constructor(row: JSONObject) : this(
+        row.getInt("jobId"),
+        row.optInt("documentId").takeIf { it > 0 },
+        row.optString("projectName").ifBlank { row.getString("customerName") },
+        listOf(row.optString("customerName").takeIf { row.optString("projectName").isNotBlank() }.orEmpty(),
+            row.optString("siteAddress"), row.optString("estimateNumber"), row.optString("invoiceNumber"))
+            .filter { it.isNotBlank() }.joinToString(" · "),
+        row.optInt("claimCount"),
+        row.optString("lastClaimAt"),
+    )
+}
+
+private fun claimLoggedDate(value: String): String {
+    val formatter = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withZone(ZoneId.systemDefault())
+    return runCatching { formatter.format(Instant.parse(value)) }.getOrDefault(value.take(10))
+}
+
+@Composable fun ClaimsWorkspace(model: AuthViewModel, canWrite: Boolean, initialJob: Int, onOpenEstimate: (Int) -> Unit) {
+    var picking by rememberSaveable { mutableStateOf(false) }
+    var search by rememberSaveable { mutableStateOf("") }
+    var offset by rememberSaveable { mutableIntStateOf(0) }
+    var openedJob by rememberSaveable(initialJob) { mutableIntStateOf(initialJob) }
+    var selectedEstimate by remember { mutableStateOf<ClaimJobRow?>(null) }
+    var rows by remember { mutableStateOf<List<ClaimJobRow>?>(null) }
+    var hasMore by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var retry by remember { mutableIntStateOf(0) }
+
+    fun showPicker(value: Boolean) {
+        picking = value
+        search = ""
+        offset = 0
+        rows = null
+    }
+
+    LaunchedEffect(picking, search, offset, retry, openedJob, selectedEstimate) {
+        if (openedJob > 0 || selectedEstimate != null) return@LaunchedEffect
+        rows = null
+        error = null
+        try {
+            if (search.isNotBlank()) delay(250)
+            val encoded = android.net.Uri.encode(search)
+            val path = if (picking) "claims/estimates" else "claims/jobs"
+            val result = model.operation("$path?search=$encoded&offset=$offset") as JSONObject
+            val jobs = result.getJSONArray("jobs")
+            rows = (0 until jobs.length()).map { ClaimJobRow(jobs.getJSONObject(it)) }
+            hasMore = result.getBoolean("hasMore")
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            error = (failure as? ApiException)?.message ?: "Could not load jobs."
+        }
+    }
+
+    BackHandler(enabled = picking || (initialJob == 0 && openedJob > 0)) {
+        when {
+            openedJob > 0 -> openedJob = 0
+            selectedEstimate != null -> selectedEstimate = null
+            else -> showPicker(false)
+        }
+    }
+
+    Column(Modifier.fillMaxSize().background(EzBossDesign.Canvas)) {
+        PageHeading("Claims", "Find a job’s callback and repair history.")
+        if (canWrite && !picking && openedJob == 0) {
+            TextButton(onClick = { showPicker(true) }) { Text("New Claim") }
+        }
+        when {
+            openedJob > 0 -> {
+                TextButton(onClick = { openedJob = 0 }) { Text("Back to claims") }
+                EstimateClaimsTab(model, "claims/jobs/$openedJob", canWrite, onOpenEstimate = onOpenEstimate)
+            }
+            selectedEstimate != null && canWrite -> {
+                val choice = selectedEstimate!!
+                TextButton(onClick = { selectedEstimate = null }) { Text("Choose a different job") }
+                Text(choice.title, Modifier.padding(horizontal = 16.dp), fontWeight = FontWeight.SemiBold)
+                Text(choice.details, Modifier.padding(horizontal = 16.dp), color = EzBossDesign.Muted)
+                EstimateClaimsTab(model, "estimates/${choice.documentId}/claims", canWrite, startAdding = true, onSaved = { id ->
+                    selectedEstimate = null
+                    showPicker(false)
+                    openedJob = id
+                })
+            }
+            else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(EzBossDesign.PagePadding),
+                verticalArrangement = Arrangement.spacedBy(EzBossDesign.Gap)) {
+                if (picking) TextButton(onClick = { showPicker(false) }) { Text("Back to claims") }
+                OutlinedTextField(search, { search = it; offset = 0 }, Modifier.fillMaxWidth(), singleLine = true,
+                    label = { Text(if (picking) "Find an estimate for this job" else "Search claims") },
+                    placeholder = { Text("Client, address, project, or document number") })
+                when {
+                    error != null -> {
+                        Text(error.orEmpty(), color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { retry++ }) { Text("Retry") }
+                    }
+                    rows == null -> EzBossLoadingIndicator()
+                    else -> {
+                        if (rows.orEmpty().isEmpty()) {
+                            Text(if (picking) "No active estimates match." else if (search.isNotBlank()) "No matching claim histories." else "No claims yet.")
+                        }
+                        rows.orEmpty().forEach { row ->
+                            OutlinedCard(onClick = {
+                                if (picking) selectedEstimate = row else openedJob = row.id
+                            }, modifier = Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(EzBossDesign.PagePadding), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(row.title, fontWeight = FontWeight.SemiBold)
+                                    Text(row.details, color = EzBossDesign.Muted)
+                                    if (row.lastClaimAt.isNotEmpty()) {
+                                        val noun = if (row.claimCount == 1) "callback" else "callbacks"
+                                        Text("${row.claimCount} $noun · Last logged ${claimLoggedDate(row.lastClaimAt)}", color = EzBossDesign.Muted)
+                                    }
+                                }
+                            }
+                        }
+                        Row {
+                            if (offset > 0) TextButton(onClick = { offset -= 25 }) { Text("Previous jobs") }
+                            if (hasMore) TextButton(onClick = { offset += 25 }) { Text("Next jobs") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private data class EstimateClaim(
+    val id: String,
+    val name: String,
+    val location: String,
+    val issueDescription: String,
+    val notes: String,
+    val createdAt: String,
+) {
+    constructor(row: JSONObject) : this(
+        row.getString("id"), row.getString("name"), row.getString("location"),
+        row.getString("issueDescription"), row.getString("notes"), row.getString("createdAt"),
+    )
+}
+
+@Composable private fun EstimateClaimsTab(
+    model: AuthViewModel,
+    path: String,
+    canWrite: Boolean,
+    startAdding: Boolean = false,
+    onSaved: ((Int) -> Unit)? = null,
+    onOpenJob: ((Int) -> Unit)? = null,
+    onOpenEstimate: ((Int) -> Unit)? = null,
+) {
+    val scope = rememberCoroutineScope()
+    var claims by remember(path) { mutableStateOf<List<EstimateClaim>?>(null) }
+    var job by remember(path) { mutableStateOf<ClaimJobRow?>(null) }
+    var jobId by remember(path) { mutableIntStateOf(0) }
+    var archived by remember(path) { mutableStateOf(true) }
+    var loadError by remember(path) { mutableStateOf<String?>(null) }
+    var reload by remember(path) { mutableIntStateOf(0) }
+    var draftId by rememberSaveable(path) { mutableStateOf(if (startAdding) java.util.UUID.randomUUID().toString() else null) }
+    var name by rememberSaveable(path) { mutableStateOf("") }
+    var location by rememberSaveable(path) { mutableStateOf("") }
+    var issueDescription by rememberSaveable(path) { mutableStateOf("") }
+    var notes by rememberSaveable(path) { mutableStateOf("") }
+    var saving by remember(path) { mutableStateOf(false) }
+    var saveError by remember(path) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(path, reload) {
+        loadError = null
+        try {
+            val result = model.operation(path) as JSONObject
+            val rows = result.getJSONArray("claims")
+            claims = (0 until rows.length()).map { EstimateClaim(rows.getJSONObject(it)) }
+            archived = result.getBoolean("archived")
+            jobId = result.getInt("jobId")
+            job = result.optJSONObject("job")?.let(::ClaimJobRow)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            loadError = (error as? ApiException)?.message ?: "Could not load claims. Try again."
+        }
+    }
+
+    fun closeForm() {
+        draftId = null
+        name = ""
+        location = ""
+        issueDescription = ""
+        notes = ""
+        saveError = null
+    }
+
+    fun saveClaim() {
+        val id = draftId ?: return
+        if (saving || !canWrite || archived) return
+        if (name.isBlank() || location.isBlank() || issueDescription.isBlank()) {
+            saveError = "Enter a name, location, and issue description."
+            return
+        }
+        val body = JSONObject().put("id", id).put("name", name).put("location", location)
+            .put("issueDescription", issueDescription).put("notes", notes)
+        saving = true
+        saveError = null
+        scope.launch {
+            try {
+                val claim = EstimateClaim(model.operation(path, method = "POST", body = body) as JSONObject)
+                claims = listOf(claim) + claims.orEmpty().filterNot { it.id == claim.id }
+                closeForm()
+                onSaved?.invoke(jobId)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: ApiException) {
+                saveError = if (error.statusCode == 409) "This claim was already saved with different details. Reopen Claims to view it."
+                    else error.message
+            } catch (_: Exception) {
+                saveError = "Could not save the claim. Try again."
+            } finally {
+                saving = false
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        DetailSection(job?.title ?: "Claims") {
+            job?.let { summary ->
+                Text(summary.details, color = EzBossDesign.Muted)
+                summary.documentId?.let { id ->
+                    if (onOpenEstimate != null) TextButton(onClick = { onOpenEstimate(id) }) { Text("Open document Claims tab") }
+                }
+            }
+            if (!claims.isNullOrEmpty() && onOpenJob != null) {
+                TextButton(onClick = { onOpenJob(jobId) }) { Text("View all claims for this job") }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Keep a record of each return visit and repair at this job site.", Modifier.weight(1f))
+                if (canWrite && !archived) {
+                    FilledIconButton(
+                        onClick = { draftId = java.util.UUID.randomUUID().toString() },
+                        enabled = draftId == null,
+                    ) { Icon(Icons.Default.Add, contentDescription = "Add claim") }
+                }
+            }
+        }
+        if (draftId != null && canWrite && !archived) {
+            DetailSection("Add claim") {
+                OutlinedTextField(name, { if (it.length <= 200) name = it }, Modifier.fillMaxWidth(),
+                    enabled = !saving, label = { Text("Name") }, singleLine = true)
+                OutlinedTextField(location, { if (it.length <= 500) location = it }, Modifier.fillMaxWidth(),
+                    enabled = !saving, label = { Text("Location") }, placeholder = { Text("Where on the job site?") })
+                OutlinedTextField(issueDescription, { if (it.length <= 5000) issueDescription = it }, Modifier.fillMaxWidth(),
+                    enabled = !saving, label = { Text("Issue description") }, placeholder = { Text("What went wrong on this visit?") }, minLines = 2)
+                OutlinedTextField(notes, { if (it.length <= 5000) notes = it }, Modifier.fillMaxWidth(),
+                    enabled = !saving, label = { Text("Notes (optional)") }, placeholder = { Text("How did you fix it?") }, minLines = 2)
+                saveError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { saveClaim() }, enabled = !saving) { Text(if (saving) "Saving…" else "Save claim") }
+                    TextButton(onClick = { closeForm() }, enabled = !saving) { Text("Cancel") }
+                }
+            }
+        }
+        when {
+            loadError != null -> {
+                Text(loadError.orEmpty(), color = MaterialTheme.colorScheme.error)
+                TextButton(onClick = { reload++ }) { Text("Retry") }
+            }
+            claims == null -> EzBossLoadingIndicator()
+            claims.isNullOrEmpty() -> Text("No claims yet.", color = EzBossDesign.Muted)
+            else -> {
+                claims.orEmpty().forEach { claim ->
+                    DetailSection(claim.name) {
+                        Text("Logged ${claimLoggedDate(claim.createdAt)}", color = EzBossDesign.Muted)
+                        ClaimField("Location", claim.location)
+                        ClaimField("Issue description", claim.issueDescription)
+                        if (claim.notes.isNotEmpty()) ClaimField("Notes", claim.notes)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun ClaimField(label: String, value: String) {
+    Text(label, fontWeight = FontWeight.SemiBold)
+    Text(value)
 }
 
 @Composable private fun EstimateInformation(value: EstimateDetail) {
@@ -349,9 +644,9 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
 @Composable private fun TotalRow(title: String, amount: Double, strong: Boolean = false) { Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.SpaceBetween) { Text(title, fontWeight = if (strong) FontWeight.Bold else FontWeight.Normal); Text(money(amount), fontWeight = if (strong) FontWeight.Bold else FontWeight.Medium) } }
 
 
-@Composable private fun DraftEditorScreen(model: AuthViewModel, id: String?, onClose: () -> Unit, onSaved: (String) -> Unit) {
-    var encoded by rememberSaveable(id) { mutableStateOf(JSONObject().put("creationRequestId", java.util.UUID.randomUUID().toString()).put("customerName", "").put("taxRate", 0).put("lineItems", JSONArray()).toString()) }
-    var ready by rememberSaveable(id) { mutableStateOf(id == null) }
+@Composable private fun DraftEditorScreen(model: AuthViewModel, id: String?, onClose: () -> Unit, onSaved: (String) -> Unit, projectId: String? = null) {
+    var encoded by rememberSaveable(id, projectId) { mutableStateOf(JSONObject().put("creationRequestId", java.util.UUID.randomUUID().toString()).put("customerName", "").put("taxRate", 0).put("lineItems", JSONArray()).toString()) }
+    var ready by rememberSaveable(id, projectId) { mutableStateOf(id == null && projectId == null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var reloadWarning by remember { mutableStateOf(false) }
@@ -362,12 +657,37 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
     val scope = rememberCoroutineScope()
     fun load() { scope.launch {
         busy = true; error = null
-        try { if (id != null) encoded = model.draft(id).toString(); ready = true }
+        try {
+            if (id != null) {
+                encoded = model.draft(id).toString()
+            } else if (projectId != null) {
+                val project = model.operation("projects/${android.net.Uri.encode(projectId)}") as JSONObject
+                check(project.isNull("archivedAt"))
+                val site = project.optJSONObject("serviceAddress") ?: JSONObject()
+                encoded = JSONObject(encoded)
+                    .put("projectId", projectId)
+                    .put("customerId", project.getString("clientId"))
+                    .put("customerName", project.optString("clientName", ""))
+                    .put("customerEmail", project.optString("clientEmail", ""))
+                    .put("customerPhone", project.optString("clientPhone", ""))
+                    .put("serviceAddress", site.optString("address", ""))
+                    .put("serviceAddress2", site.optString("address2", ""))
+                    .put("serviceCity", site.optString("city", ""))
+                    .put("serviceState", site.optString("state", ""))
+                    .put("serviceZipCode", site.optString("zipCode", ""))
+                    .toString()
+            }
+            ready = true
+        }
         catch (e: kotlinx.coroutines.CancellationException) { throw e }
         catch (e: Exception) { error = "Could not load draft. Check your access and connection, then retry." }
         finally { busy = false }
     } }
-    LaunchedEffect(id) { if (!ready) load() }
+    LaunchedEffect(id, projectId) { if (!ready) load() }
+    BackHandler {
+        if (importingCollection) importingCollection = false
+        else if (!busy || !ready) onClose()
+    }
     if(importingCollection){
         CollectionImportPicker(model,{importingCollection=false}){ imported ->
             val draft=JSONObject(encoded);val lines=draft.optJSONArray("lineItems") ?: JSONArray()
@@ -377,10 +697,13 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
         return
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        TextButton(onClick = onClose, enabled = !busy) { Text("Back to documents") }
+        TextButton(onClick = onClose, enabled = !busy || !ready) { Text("Back to documents") }
         Text(if (id == null) "Estimate draft" else "Edit document", style = MaterialTheme.typography.headlineSmall)
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (busy) EzBossLoadingIndicator()
+        if (projectId != null && !ready && error != null) {
+            TextButton(onClick = { load() }, enabled = !busy) { Text("Retry loading project") }
+        }
         if (ready) {
             val draft = JSONObject(encoded)
             fun field(key: String, value: String) { draft.put(key, value); encoded = draft.toString() }

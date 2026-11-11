@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -31,9 +32,9 @@ import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Dashboard
+import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Business
-import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.CollectionsBookmark
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
@@ -82,6 +83,7 @@ private val appDestinations = listOf(
     AppDestination("Inventory", "inventory"),
     AppDestination("Collections", "collections"),
     AppDestination("Work Orders", "work-orders"),
+    AppDestination("Claims", "claims"),
     AppDestination("Finances", "finance"),
     AppDestination("Purchasing", "purchasing"),
     AppDestination("People", "people"),
@@ -89,7 +91,7 @@ private val appDestinations = listOf(
 )
 
 // Reserved for a future authenticated estimate detail destination.
-private const val EstimateDetailRoute = "estimates/{estimateId}"
+private const val EstimateDetailRoute = "estimates/{estimateId}?claims={claims}"
 
 class MainActivity : ComponentActivity() {
     private val authConfig by lazy { authConfiguration() }
@@ -172,7 +174,9 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
             throw e
         }
     }
-    suspend fun estimatePage(customer: String, estimateState: String?, clientState: String?, offset: Int) = authenticatedRequest { api.estimates(it, company(), customer, estimateState, clientState, offset) }
+    suspend fun estimatePage(customer: String, estimateState: String?, clientState: String?, offset: Int, projectId: String? = null) = authenticatedRequest {
+        api.estimates(it, company(), customer, estimateState, clientState, offset, projectId = projectId)
+    }
     suspend fun dashboardData(path: String) = authenticatedRequest { api.dashboardData(it, path, company()) }
     suspend fun documentAction(id: String, action: String, body: org.json.JSONObject = org.json.JSONObject()) = authenticatedRequest { api.documentAction(it, company(), id, action, body) }
     suspend fun accountOperation(path: String, method: String = "GET", body: org.json.JSONObject? = null): Any {
@@ -369,15 +373,24 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
 @Composable private fun AuthenticatedShell(account: Account, model: AuthViewModel, open: Boolean, onOpen: () -> Unit, onDismiss: () -> Unit, busy: Boolean, onSignOut: () -> Unit) {
     val navController = rememberNavController()
     var allowedPages by remember(model.membership) { mutableStateOf<Set<String>?>(null) }
+    var canWriteProjects by remember(model.membership) { mutableStateOf(false) }
+    var canDeleteProjects by remember(model.membership) { mutableStateOf(false) }
+    var canReadClaims by remember(model.membership) { mutableStateOf(false) }
+    var canWriteProjectDocuments by remember(model.membership) { mutableStateOf(false) }
     var accessError by remember(model.membership) { mutableStateOf(false) }
     var accessRetry by remember { mutableIntStateOf(0) }
     LaunchedEffect(model.membership, accessRetry) {
-        allowedPages = null; accessError = false
+        allowedPages = null; accessError = false; canWriteProjects = false; canDeleteProjects = false; canWriteProjectDocuments = false; canReadClaims = false
         try {
             val result = model.operation("account/me?membershipId=${model.membership}") as org.json.JSONObject
             val effective = result.getJSONObject("effectivePermissions")
             val pages = effective.getJSONObject("pages")
             val capabilities = effective.getJSONObject("capabilities")
+            canWriteProjects = capabilities.optJSONObject("write:projects")?.optBoolean("allowed") == true
+            canDeleteProjects = capabilities.optJSONObject("delete:projects")?.optBoolean("allowed") == true
+            canReadClaims = capabilities.optJSONObject("read:estimates")?.optBoolean("allowed") == true
+            canWriteProjectDocuments = canReadClaims &&
+                capabilities.optJSONObject("write:estimates")?.optBoolean("allowed") == true
             allowedPages = pages.keys().asSequence().filter { pages.getJSONObject(it).optBoolean("allowed") }.toSet().filter { key ->
                 key !in listOf("inventory", "collections", "purchasing") || capabilities.optJSONObject("read:$key")?.optBoolean("allowed") == true
             }.toSet().let { allowed ->
@@ -391,6 +404,7 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
         "settings" -> true
         "people" -> allowedPages.orEmpty().any { it in listOf("clients", "employees") }
         "finance" -> "finances" in allowedPages.orEmpty()
+        "claims" -> canReadClaims && "estimates" in allowedPages.orEmpty()
         else -> route.substringBefore("?") in allowedPages.orEmpty()
     }
     val backStack by navController.currentBackStackEntryAsState()
@@ -417,7 +431,7 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                     }
                 }
                 Box(Modifier.weight(1f)) {
-                    AuthenticatedDestinationHost(navController, model, account, ::canOpen, allowedPages != null, accessError) { accessRetry++ }
+                    AuthenticatedDestinationHost(navController, model, account, ::canOpen, allowedPages != null, accessError, canWriteProjects, canDeleteProjects, canWriteProjectDocuments) { accessRetry++ }
 
                 }
             }
@@ -433,9 +447,8 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                 Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).semantics { contentDescription = "Navigation destinations" }) {
                     appDestinations.filter { canOpen(it.route) }.forEach { destination ->
                         val selected = selectedRoute.substringBefore("?") == destination.route || (destination.route == "estimates" && selectedRoute == EstimateDetailRoute)
-                        NavigationDestinationRow(destination.title, selected) {
+                        NavigationDestinationRow(destination.title, selected, onDismiss) {
                             if (!selected) navController.navigate(destination.route) { launchSingleTop = true }
-                            onDismiss()
                         }
                     }
                 }
@@ -470,10 +483,20 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     }
 }
 
-@Composable private fun AuthenticatedDestinationHost(navController: NavHostController, model: AuthViewModel, account: Account, canOpen: (String) -> Boolean, accessLoaded: Boolean, accessError: Boolean, retryAccess: () -> Unit) {
+@Composable private fun AuthenticatedDestinationHost(navController: NavHostController, model: AuthViewModel, account: Account, canOpen: (String) -> Boolean, accessLoaded: Boolean, accessError: Boolean, canWriteProjects: Boolean, canDeleteProjects: Boolean, canWriteProjectDocuments: Boolean, retryAccess: () -> Unit) {
     NavHost(navController = navController, startDestination = appDestinations.first().route, modifier = Modifier.fillMaxSize()) {
         appDestinations.forEach { destination ->
-            composable(if (destination.route == "estimates") "estimates?type={type}" else destination.route, arguments = if (destination.route == "estimates") listOf(navArgument("type") { type = NavType.StringType; defaultValue = "all" }) else emptyList()) { entry ->
+            val route = when (destination.route) {
+                "estimates" -> "estimates?type={type}"
+                "claims" -> "claims?job={job}"
+                else -> destination.route
+            }
+            val arguments = when (destination.route) {
+                "estimates" -> listOf(navArgument("type") { type = NavType.StringType; defaultValue = "all" })
+                "claims" -> listOf(navArgument("job") { type = NavType.IntType; defaultValue = 0 })
+                else -> emptyList()
+            }
+            composable(route, arguments = arguments) { entry ->
                 if (!canOpen(destination.route)) {
                     Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         Text(if(accessError) "Workspace access could not be loaded." else if(!accessLoaded) "Loading workspace access…" else "This page is unavailable for your account.")
@@ -482,33 +505,78 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                 }
                 else if (destination.route == "dashboard") DashboardScreen(account, model, { navController.navigate("estimates/$it") }, { navController.navigate(it) { launchSingleTop = true } }, canOpen)
                 else if (destination.route == "estimates") EstimatesListScreen(model, when(entry.arguments?.getString("type")) { "estimate" -> "Estimate"; "invoice" -> "Invoice"; else -> "All" }) { id -> navController.navigate("estimates/$id") }
+                else if (destination.route == "claims") ClaimsWorkspace(model, canWriteProjectDocuments, entry.arguments?.getInt("job") ?: 0) {
+                    navController.navigate("estimates/$it?claims=true")
+                }
                 else if (destination.route in listOf("inventory", "collections", "work-orders", "purchasing")) OperationsScreen(model, destination.route, canOpen)
-                else if (destination.route in listOf("projects","finance")) BusinessRecordsScreen(model,destination.route)
+                else if (destination.route in listOf("projects","finance")) BusinessRecordsScreen(model, destination.route, canWriteProjects, canDeleteProjects) { projectId, section, archived ->
+                    val query = if (section == "documents" && archived) "?archived=true" else ""
+                    navController.navigate("projects/${android.net.Uri.encode(projectId)}/$section$query")
+                }
                 else if (destination.route == "people") PeopleSettingsScreen(model, false)
                 else if (destination.route == "settings") PeopleSettingsScreen(model, true)
                 else PlaceholderDestination(destination.title)
             }
         }
-        composable("estimates/{estimateId}") { entry ->
+        composable("projects/{projectId}/documents?archived={archived}",
+            arguments = listOf(navArgument("archived") { type = NavType.BoolType; defaultValue = false })) { entry ->
+            val id = entry.arguments?.getString("projectId").orEmpty()
+            val canCreate = canWriteProjectDocuments && entry.arguments?.getBoolean("archived") != true
+            if (id.isNotEmpty() && canOpen("projects")) EstimatesListScreen(model, projectId = id, canCreateProjectDraft = canCreate) { documentId ->
+                navController.navigate("estimates/$documentId")
+            }
+        }
+        listOf("work-orders", "purchasing").forEach { section ->
+            composable("projects/{projectId}/$section") { entry ->
+                val id = entry.arguments?.getString("projectId").orEmpty()
+                if (id.isNotEmpty() && canOpen("projects")) OperationsScreen(model, section, canOpen, projectId = id)
+            }
+        }
+        composable(EstimateDetailRoute, arguments = listOf(navArgument("claims") {
+            type = NavType.BoolType
+            defaultValue = false
+        })) { entry ->
             val id = entry.arguments?.getString("estimateId").orEmpty()
-            EstimateDetailScreen(model, id) { navController.popBackStack() }
+            EstimateDetailScreen(model, id, canWriteProjectDocuments, entry.arguments?.getBoolean("claims") == true,
+                onOpenClaimJob = { navController.navigate("claims?job=$it") }) { navController.popBackStack() }
         }
     }
 }
 
-@Composable private fun NavigationDestinationRow(title: String, selected: Boolean, onClick: () -> Unit) {
+@Composable private fun NavigationDestinationRow(title: String, selected: Boolean, onDismiss: () -> Unit, onNavigate: () -> Unit) {
+    val interactions = remember { MutableInteractionSource() }
+    val hovered by interactions.collectIsHoveredAsState()
+    var activated by remember { mutableStateOf(false) }
+    var playing by remember { mutableStateOf(false) }
+    val animateIcon = title == "Inventory"
+    LaunchedEffect(hovered) {
+        if (animateIcon && !activated) playing = hovered
+    }
     val background = if (selected) BrandOrange else Color.Transparent
     TextButton(
-        onClick = onClick,
+        onClick = {
+            onNavigate()
+            if (animateIcon) {
+                activated = true
+                playing = true
+            } else {
+                onDismiss()
+            }
+        },
+        interactionSource = interactions,
         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).heightIn(min = 48.dp).semantics { this.selected = selected },
         shape = RoundedCornerShape(8.dp),
         colors = ButtonDefaults.textButtonColors(contentColor = Color.White, containerColor = background),
     ) {
-        Icon(when(title) {
+        if (animateIcon) InventoryPackingIcon(playing) {
+            playing = false
+            if (activated) onDismiss()
+        }
+        else Icon(when(title) {
             "Dashboard" -> Icons.Outlined.Dashboard
             "Estimates" -> Icons.Outlined.Description
+            "Claims" -> Icons.Outlined.Build
             "Projects" -> Icons.Outlined.Business
-            "Inventory" -> Icons.Outlined.Inventory2
             "Collections" -> Icons.Outlined.CollectionsBookmark
             "Work Orders" -> Icons.Outlined.Checklist
             "Finances" -> Icons.Outlined.AccountBalanceWallet

@@ -33,7 +33,7 @@ private fun JSONObject.identifier(): String = optString("id").takeIf { it.isNotB
 private fun JSONObject.rows(key: String) = optJSONArray(key)?.let { array -> (0 until array.length()).map { array.getJSONObject(it) } } ?: emptyList()
 
 @Composable
-fun OperationsScreen(model: AuthViewModel, destination: String, canOpen: (String) -> Boolean = { true }) {
+fun OperationsScreen(model: AuthViewModel, destination: String, canOpen: (String) -> Boolean = { true }, projectId: String? = null) {
     var kind by remember(destination) { mutableStateOf(if (destination == "inventory") listOf("products", "labor", "tools", "equipment").firstOrNull { canOpen("inventory-$it") } ?: "products" else destination) }
     val path = when { destination == "inventory" -> "inventory/$kind"; kind == "assigned" -> "employee/work-orders"; destination == "purchasing" -> "purchase-orders"; else -> destination }
     var rows by remember(path) { mutableStateOf<List<JSONObject>>(emptyList()) }
@@ -46,9 +46,27 @@ fun OperationsScreen(model: AuthViewModel, destination: String, canOpen: (String
     var page by remember(path) { mutableIntStateOf(0) }
     var more by remember(path) { mutableStateOf(false) }
     var reload by remember(path) { mutableIntStateOf(0) }
-    LaunchedEffect(path, reload, page) {
-        busy = true; error = null
-        try { val next = operationRows(model.operation(path+(if(path=="purchase-orders") "?limit=25&offset=${page*25}" else ""))); rows = if(page==0) next else (rows+next).distinctBy{it.identifier()}; more=path=="purchase-orders"&&next.size==25 } catch (e: Exception) { rows=emptyList();more=false;error = e.message ?: "Could not load. Retry." } finally { busy = false }
+    LaunchedEffect(path, reload, page, projectId) {
+        busy = true
+        error = null
+        try {
+            val query = android.net.Uri.Builder()
+            if (projectId != null) query.appendQueryParameter("projectId", projectId)
+            if (path == "purchase-orders") {
+                query.appendQueryParameter("limit", "25").appendQueryParameter("offset", (page * 25).toString())
+            }
+            val next = operationRows(model.operation(path + query.build().toString()))
+            rows = if (page == 0) next else (rows + next).distinctBy { it.identifier() }
+            more = path == "purchase-orders" && next.size == 25
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            rows = emptyList()
+            more = false
+            error = e.message ?: "Could not load. Retry."
+        } finally {
+            busy = false
+        }
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         PageHeading(destination.replace('-', ' ').replaceFirstChar { it.uppercase() }, when(destination) {
@@ -69,7 +87,7 @@ fun OperationsScreen(model: AuthViewModel, destination: String, canOpen: (String
             }
             Text(kind.replaceFirstChar { it.uppercase() }, color = EzBossDesign.categoryColor(kind), style = MaterialTheme.typography.titleLarge)
         }
-        if (destination == "work-orders") Row { TextButton(onClick={kind="work-orders"}) { Text("Manage jobs") }; TextButton(onClick={kind="assigned"}) { Text("My assigned jobs") } }
+        if (destination == "work-orders" && projectId == null) Row { TextButton(onClick={kind="work-orders"}) { Text("Manage jobs") }; TextButton(onClick={kind="assigned"}) { Text("My assigned jobs") } }
         if(destination=="collections")TextButton(onClick={aiOpen=true}){Text("AI collection assistant")}
         when {
             aiOpen -> NativeAICollection(model){aiOpen=false;reload++}
@@ -80,8 +98,8 @@ fun OperationsScreen(model: AuthViewModel, destination: String, canOpen: (String
                 if (busy) EzBossLoadingIndicator()
                 error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
                 TextButton(onClick={page=0;reload++},enabled=!busy) { Text("Refresh / retry") }
-                if (destination in listOf("inventory","collections","purchasing")) Button(onClick={creating=true}) { Text("Create") }
-                if (rows.isEmpty() && !busy && error == null) Text("No items in this company.")
+                if (projectId == null && destination in listOf("inventory","collections","purchasing")) Button(onClick={creating=true}) { Text("Create") }
+                if (rows.isEmpty() && !busy && error == null) Text(if (projectId == null) "No items in this company." else "No linked records.")
                 if(more)TextButton(onClick={page++},enabled=!busy){Text("Load more")}
                 rows.filter { it.label().contains(search,ignoreCase=true) }.forEach { row ->
                     WorkspaceRecord(row.label(), row.optString("status", "")) { selected = row.identifier() }

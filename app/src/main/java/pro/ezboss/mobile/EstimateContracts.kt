@@ -8,6 +8,7 @@ internal fun estimateDashboardTabs(isChangeOrder: Boolean): List<EstimateTabCont
     if (!isChangeOrder) add(EstimateTabContract("Change Orders", true))
     add(EstimateTabContract("Payments", true))
     add(EstimateTabContract("Timeline", true))
+    add(EstimateTabContract("Claims", true))
     add(EstimateTabContract("Communication", true))
     add(EstimateTabContract("History", true))
 }

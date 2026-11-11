@@ -59,12 +59,13 @@ class ApiClient(baseUrl: String, transport: OkHttpClient = OkHttpClient(), priva
         http.newCall(request).execute().use { response -> if(!response.isSuccessful)throw ApiException(response.code,"Company setup was not confirmed. Retry account access before submitting again.") }
     }
 
-    suspend fun estimates(token: String, membership: String, customerName: String, estimateState: String?, clientState: String?, offset: Int, limit: Int = 25): EstimatePage = withContext(Dispatchers.IO) {
+    suspend fun estimates(token: String, membership: String, customerName: String, estimateState: String?, clientState: String?, offset: Int, limit: Int = 25, projectId: String? = null): EstimatePage = withContext(Dispatchers.IO) {
         val query = buildList {
             add("limit=$limit"); add("offset=$offset")
             if (customerName.isNotBlank()) add("customerName=${encode(customerName.trim())}")
             estimateState?.let { add("estimateState=${encode(it)}") }
             clientState?.let { add("clientState=${encode(it)}") }
+            projectId?.let { add("projectId=${encode(it)}") }
         }.joinToString("&")
         val rows = get("$baseUrl/estimates?$query", token, membership) as? JSONArray ?: throw IOException("Unexpected estimates response")
         EstimatePage((0 until rows.length()).map { mapEstimateListItem(rows.getJSONObject(it)) }, rows.length() == limit)
@@ -139,7 +140,7 @@ class ApiClient(baseUrl: String, transport: OkHttpClient = OkHttpClient(), priva
         requireSecureConfiguration(token)
         val request = Request.Builder().url("$baseUrl/$path").header("Authorization", "Bearer $token").header("X-Company-Membership-Id", membership)
             .apply { if (providerKey != null) header("X-AI-Key",providerKey) }
-            .method(method, if (method == "GET" || method == "DELETE") null else (body ?: JSONObject()).toString().toRequestBody("application/json".toMediaType())).build()
+            .method(method, if (method == "GET" || (method == "DELETE" && body == null)) null else (body ?: JSONObject()).toString().toRequestBody("application/json".toMediaType())).build()
         val transport = if (providerKey == null) http else http.newBuilder().callTimeout(60,TimeUnit.SECONDS).build()
         transport.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw ApiException(response.code, when(response.code) {
@@ -282,7 +283,10 @@ internal fun draftPayload(draft: JSONObject): JSONObject {
     }
     result.put("nativeAuthoring", true)
     result.put("taxRate", rate).put("draftOnly", !draft.has("id") || draft.optString("estimateState") == "draft")
-    if (!draft.has("id")) result.put("estimateState", "draft")
+    if (!draft.has("id")) {
+        result.put("estimateState", "draft")
+        if (draft.has("projectId")) result.put("projectId", draft.getString("projectId"))
+    }
     val lines = draft.optJSONArray("lineItems") ?: JSONArray()
     result.put("lineItems", JSONArray().apply {
         for (i in 0 until lines.length()) {
