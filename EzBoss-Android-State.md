@@ -1,5 +1,115 @@
 # EzBoss Android State
 
+## Signup password checklist (November 15, 2026)
+
+- `auth/ui/NativeIdentityScreen.kt` lists the four signup password requirements: at least eight characters, an uppercase letter, a symbol, and a number. Rules become checkmarks as they are met, and missing rules show red Xs after an attempted signup. The shared auth service enforces the same rules. No Android configuration or database migration is needed.
+- Android debug Kotlin compilation passed in a temporary copy. The iOS simulator target build, browser tests at five widths, and PostgreSQL auth protocol tests passed. Native UI interaction remains unverified; no simulator or emulator was started.
+
+## Sign-in prompts for account linking (November 15, 2026)
+
+- Removed both standalone linking actions from the Android sign-in screen to match iOS and web. A failed password attempt for an eligible Google-only account sends a private password setup prompt through the shared auth service.
+- Android compilation, the iOS simulator-target build, web browser tests, and the local PostgreSQL protocol test passed. No simulator or emulator was started.
+
+## Google and password account linking (November 15, 2026)
+
+- `auth/ui/NativeIdentityScreen.kt` opens both Google merge and first-password setup in the device browser, matching iOS. Users verify in the shared hosted flow, then return to the native password sign-in. Direct native Google sign-in still needs a signed native OAuth session flow.
+- Android debug Kotlin compilation and JVM tests passed in a temporary workspace. The iOS simulator-target build passed. No simulator or emulator was started; native interaction and deployment remain pending. The shared auth service requires migration 006 before rollout.
+
+## Better Auth session rate limits (November 15, 2026)
+
+- `auth/AuthRepository.kt` and `MainActivity.kt` reuse a successful session check for up to 10 seconds for routine API requests, matching iOS and web. The API still validates each request; restoration and account changes still check the session directly. No configuration changes.
+- Android compilation and JVM tests passed in a clean temporary copy after the workspace build hit a stale generated resource. Web build and browser tests at five widths, plus all 48 iOS core tests, passed. Native UI interaction remains unverified. No simulator or emulator was started.
+
+## Landing form input font weight (November 13, 2026)
+
+- `auth/ui/NativeIdentityScreen.kt` applies regular-weight field text across sign-in, recovery, verification, sign-up, multifactor authentication, and company setup. No configuration changes.
+- Android debug Kotlin compilation passed in a clean temporary copy. The iOS simulator-target build and web authentication browser tests at five widths passed. Native UI interaction remains unverified. No simulator or emulator was started.
+
+## Sign-in input font weight (November 13, 2026)
+
+- `auth/ui/NativeIdentityScreen.kt` uses regular-weight text in the sign-in email and password fields, including when the password is visible. No configuration changes.
+- Android debug Kotlin compilation passed in a clean temporary copy after stale generated resources blocked the workspace build. The iOS simulator-target build and web browser test at five widths passed. Native UI interaction remains unverified. No simulator or emulator was started.
+
+## Forgot password placement (November 13, 2026)
+
+- `auth/ui/NativeIdentityScreen.kt` places “Forgot password?” directly below the password field in sign-in and account creation, matching iOS. Desktop and mobile web place it below the sign-in password field. No configuration changes.
+- Android debug Kotlin compilation and the iOS simulator-target build passed. The web browser fixture verified placement and recovery navigation at five widths. Native UI interaction remains unverified. No simulator or emulator was started.
+
+## Password visibility icon (November 11, 2026)
+
+- `auth/ui/NativeIdentityScreen.kt` puts an accessible eye button inside the password field for sign-in and account creation, matching iOS and responsive web. No configuration changes.
+- Android debug Kotlin compilation passed in a clean temporary copy. The iOS simulator-target build and browser fixture at five widths passed. Native interaction testing remains pending. No simulator or emulator was started.
+
+## Authenticator sign-in guidance (November 11, 2026)
+
+- `auth/ui/NativeIdentityScreen.kt` explains that Google Authenticator codes are entered after signing in with an EzBoss email and password, matching iOS and web. No configuration or authentication changes.
+- Android compilation remains unverified because the sandbox blocked Gradle's local lock socket. No emulator was started.
+
+## Pre-inspection Punch-list (November 11, 2026)
+
+- `MainActivity.kt` and `ProjectInspections.kt` let project editors add prep items, mark them ready, and reopen them. The tab shows how many items remain open and still supports update notes. Archived projects and viewers have read-only access. The shared API requires migration `128_project_punch_items.sql`. No Android configuration changes.
+- Android debug assembly and JVM tests passed in an isolated copy. The iOS simulator-target build, web and API builds, desktop and phone-width browser fixtures, and disposable PostgreSQL regression passed. Native UI interaction and deployment remain pending. No simulator or emulator was started.
+
+## Work orders in project tabs (November 11, 2026)
+
+- `ProjectInspections.kt` lists the current project's linked work orders below its Punch-list notes and scheduled inspections. `MainActivity.kt` and `Operations.kt` open the existing work-order detail and return to the source screen on Back. No Android configuration or API changes.
+- Android debug assembly and JVM tests, the iOS simulator-target build, the web production build, the TypeScript check, and the desktop and phone-width browser fixture passed. Native UI interaction remains unverified. No simulator or emulator was started.
+
+## Linked project action on estimate dashboards (November 11, 2026)
+
+- `Estimates.kt` shows an orange “View project” button for linked estimates when the account can open Projects. `MainActivity.kt` uses the existing project overview route, and `data/ApiClient.kt` reads the estimate's project ID. No configuration changes.
+- The web production build, desktop and phone browser checks, and iOS simulator-target build passed. Android verification is pending because Kotlin compilation fails in separate `ProjectInspections.kt` changes. Native UI interaction remains unverified. No simulator or emulator was started.
+
+## Better Auth sign-in options (November 11, 2026)
+
+- `auth/ui/NativeIdentityScreen.kt` adds a disabled Apple sign-in button, matching iOS. Native Google sign-in needs an OAuth flow that establishes and verifies a signed native session. Google is available in desktop and mobile browsers. No Android configuration changes.
+- Android debug assembly and JVM tests passed. The iOS simulator-target build and the desktop and phone-width browser checks passed. Native UI interaction is pending. No simulator or emulator was started.
+
+## Project dashboard layout (November 11, 2026)
+
+- `BusinessRecords.kt` puts the project identity and edit, archive, and delete actions above a horizontally scrollable navigation row, with type and status followed by a Project Details card. Linked records still open their existing screens. No configuration changes.
+- Android debug assembly and JVM tests passed. The iOS simulator-target build passed. Native UI interaction remains unverified. No simulator or emulator was started.
+
+## Project editor styling (November 11, 2026)
+
+- `BusinessRecords.kt` gives project creation and editing a plain title, grouped fields, and clear Create Project, Save Changes, and Cancel actions. The native editor keeps its scrollable layout, consistent with native Inventory. No configuration changes.
+- Android debug assembly and all 36 JVM tests passed. The iOS simulator-target build passed. Chrome fixture checks passed for the tabbed web forms at 320, 390, and 1280 px. Native UI interaction remains unverified. No simulator or emulator was started.
+
+## Return from project estimates (November 11, 2026)
+
+- `MainActivity.kt` and `Estimates.kt` label the estimate dashboard's Back action “Back to project documents” when opened through the project. The action returns to that project's Documents screen, including after a new draft is saved. No Android configuration changes.
+- Android debug assembly and JVM tests passed. The iOS simulator-target build and desktop and phone-width browser regression passed. Native navigation was not tested interactively. No simulator or emulator was started.
+
+## Project estimate deletion (November 11, 2026)
+
+- `MainActivity.kt` gates deletion in Project documents on the estimate deletion grant. `Estimates.kt` shows the estimate details and 30-day retention warning, removes the card when the archive request succeeds, and shows a dismissible success banner. `data/ApiClient.kt` reads the creation date and invoice protection fields. No configuration changes.
+- Android debug assembly and 36 JVM tests passed. The iOS simulator-target build, web production build, and desktop and phone-width browser regression checks passed. Native UI interaction remains unverified. No simulator or emulator was started.
+
+## Inspection Required Items and update notes (November 11, 2026)
+
+- `ProjectInspections.kt` adds multiline Required Items below Location and Date, including edits to existing inspections. `BusinessRecords.kt` and `MainActivity.kt` route to project-level Punch-list notes and inspection-specific update notes. Archived projects and viewers can read saved entries. The shared API uses migration `127_project_update_notes.sql`. No Android configuration changes.
+- Android debug assembly and 36 JVM tests, iOS simulator-target compilation, web and API builds, desktop and phone-width browser flows, and the disposable PostgreSQL migration and project regression passed. No simulator or emulator was started. Native UI acceptance and deployment remain pending.
+
+## Project shortcut tooltip (November 11, 2026)
+
+- `Estimates.kt` shows a white folder and a tooltip with the project name and number on pointer hover or long press. `data/ApiClient.kt` reads the permission-scoped label from the estimates list API. No Android configuration changes.
+- Android debug assembly and JVM tests, the iOS simulator-target build, web and API builds, and browser and API fixture checks passed. Native tooltip interaction remains unverified. No simulator or emulator was started.
+
+## Schedule project inspections (November 11, 2026)
+
+- `BusinessRecords.kt` and `MainActivity.kt` open Inspections from project details. `ProjectInspections.kt` lists scheduled inspections and lets project editors save a location and calendar date. Archived projects show saved inspections. No Android configuration changes.
+- Android debug assembly and JVM tests, the iOS simulator-target build, desktop and phone-width browser flows with mocked API responses, and the PostgreSQL project regressions passed. Native UI interaction and deployment remain pending. No simulator or emulator was started.
+
+## Linked projects in Estimates (November 11, 2026)
+
+- `Estimates.kt` and `data/ApiClient.kt` show a visible orange folder shortcut for linked estimates when Projects is available. The card still opens the estimate. `MainActivity.kt` and `BusinessRecords.kt` open the existing project overview directly, with Back returning to the estimate list. No API or configuration changes.
+- Android debug assembly and JVM tests, the iOS simulator-target build, and the web production build passed. Browser fixture checks passed for hover, keyboard focus, phone touch targets and navigation. Native UI interaction remains unverified. No simulator or emulator was started.
+
+## Save project estimates explicitly (November 11, 2026)
+
+- `Estimates.kt` opens an unsaved editor from Project documents, prefills it from the project detail, and returns to the list when dismissed. `data/ApiClient.kt` sends the project ID on the first save. No Android configuration changes.
+- Android debug assembly and JVM tests passed. The iOS simulator-target build passed. Native UI interaction remains unverified. No simulator or emulator was started.
+
 ## Sidebar icon playback (November 10, 2026)
 
 - `MainActivity.kt` and `InventoryPackingIcon.kt` start Inventory playback on row hover or activation. Leaving the row resets hover-only playback. Activating the row navigates immediately and closes the drawer when the icon finishes. Opening the drawer leaves the icon idle. No configuration changes.

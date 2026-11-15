@@ -10,13 +10,17 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.ui.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
@@ -35,8 +39,26 @@ import org.json.JSONObject
 import org.json.JSONArray
 
 private val estimateRowsSaver = listSaver<List<EstimateListItem>, String>(
-    save = { rows -> rows.map { row -> JSONArray().put(row.id).put(row.number).put(row.customer).put(row.estimateState).put(row.clientState).put(row.total).toString() } },
-    restore = { saved -> saved.mapNotNull { encoded -> runCatching { JSONArray(encoded).let { EstimateListItem(it.getString(0), it.getString(1), it.getString(2), it.getString(3), it.optString(4).takeIf { state -> state.isNotBlank() && state != "null" }, it.getDouble(5)) } }.getOrNull() } },
+    save = { rows ->
+        rows.map { row ->
+            JSONArray().put(row.id).put(row.number).put(row.customer).put(row.estimateState)
+                .put(row.clientState).put(row.total).put(row.projectId).put(row.projectLabel).put(row.createdDate).put(row.hasIssuedInvoice).toString()
+        }
+    },
+    restore = { saved ->
+        saved.mapNotNull { encoded ->
+            runCatching {
+                val row = JSONArray(encoded)
+                EstimateListItem(
+                    row.getString(0), row.getString(1), row.getString(2), row.getString(3),
+                    row.optString(4).takeIf { it.isNotBlank() && it != "null" }, row.getDouble(5),
+                    row.optString(6).takeIf { !row.isNull(6) && it.isNotBlank() },
+                    row.optString(7).takeIf { !row.isNull(7) && it.isNotBlank() },
+                    row.optString(8).takeIf { !row.isNull(8) && it.isNotBlank() }, row.optBoolean(9),
+                )
+            }.getOrNull()
+        }
+    },
 )
 
 private val listStates = listOf("All", "Draft", "Estimate", "Change order", "Invoice")
@@ -44,7 +66,7 @@ private val clientStates = listOf("Any", "Sent", "Viewed", "Accepted", "Denied",
 private fun money(value: Double) = NumberFormat.getCurrencyInstance(Locale.US).format(value)
 private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
 
-@Composable fun EstimatesListScreen(model: AuthViewModel, initialFilter: String = "All", projectId: String? = null, canCreateProjectDraft: Boolean = false, onOpen: (String) -> Unit) {
+@Composable fun EstimatesListScreen(model: AuthViewModel, initialFilter: String = "All", projectId: String? = null, canCreateProjectDraft: Boolean = false, canDeleteProjectDocuments: Boolean = false, onOpenProject: ((String) -> Unit)? = null, onOpen: (String) -> Unit) {
     var creating by rememberSaveable(projectId) { mutableStateOf(false) }
     if (creating) {
         DraftEditorScreen(model, null, onClose = { creating = false }, onSaved = { creating = false; onOpen(it) }, projectId = projectId)
@@ -62,6 +84,11 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
     var canLoadMore by remember { mutableStateOf(false) }
     var generation by remember { mutableIntStateOf(0) }
     var searchJob by remember { mutableStateOf<Job?>(null) }
+    var pendingDelete by remember { mutableStateOf<EstimateListItem?>(null) }
+    var deleting by remember { mutableStateOf(false) }
+    var deleteSuccess by rememberSaveable { mutableStateOf<String?>(null) }
+    var deleteError by remember { mutableStateOf<String?>(null) }
+    val deletedIds = remember { mutableSetOf<String>() }
     val scope = rememberCoroutineScope()
 
     fun load(reset: Boolean) {
@@ -72,7 +99,8 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
             try {
                 val page = model.estimatePage(search, estimateStateQuery(estimateFilter), clientStateQuery(clientFilter), offset, projectId)
                 if (requestGeneration == generation) {
-                    rows = if (reset) page.items else rows + page.items
+                    val active = page.items.filterNot { it.id in deletedIds }
+                    rows = if (reset) active else rows + active
                     canLoadMore = page.canLoadMore
                     error = null
                 }
@@ -94,6 +122,16 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
 
     Column(Modifier.fillMaxSize().background(EzBossDesign.Canvas)) {
         PageHeading(if (projectId == null) "Estimates" else "Project documents", "Estimates, invoices and change orders")
+        deleteSuccess?.let { message ->
+            Row(
+                Modifier.fillMaxWidth().background(Color(0xFFEAF8EF)).padding(start = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(message, Modifier.weight(1f), color = Color(0xFF176B36))
+                IconButton(onClick = { deleteSuccess = null }) { Icon(Icons.Default.Close, "Dismiss success message") }
+            }
+        }
+        deleteError?.let { Text(it, Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error) }
         if (projectId == null || canCreateProjectDraft) {
             TextButton(onClick = { creating = true }) { Text("Create estimate draft") }
         }
@@ -116,17 +154,58 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
             loading && rows.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EzBossLoadingIndicator() }
             error != null && rows.isEmpty() -> StateMessage(if (denied) "Access denied" else "Couldn’t load estimates", error!!, if (denied) null else "Retry") { generation++; load(true) }
             rows.isEmpty() -> StateMessage(if (search.isNotBlank() || estimateFilter != "All" || clientFilter != "Any") "No matching estimates" else "No estimates yet", if (search.isNotBlank() || estimateFilter != "All" || clientFilter != "Any") "Try changing your search or filters." else "Estimates will appear here when they are available.", null) {}
-            else -> LazyVerticalGrid(columns = GridCells.Adaptive(160.dp), contentPadding = PaddingValues(EzBossDesign.PagePadding), horizontalArrangement = Arrangement.spacedBy(EzBossDesign.Gap), verticalArrangement = Arrangement.spacedBy(EzBossDesign.Gap), modifier = Modifier.fillMaxSize()) {
-                items(rows, key = { it.id }) { item -> EstimateCard(item) { onOpen(item.id) } }
+            else -> LazyVerticalGrid(columns = GridCells.Adaptive(if (onOpenProject == null) 160.dp else 208.dp), contentPadding = PaddingValues(EzBossDesign.PagePadding), horizontalArrangement = Arrangement.spacedBy(EzBossDesign.Gap), verticalArrangement = Arrangement.spacedBy(EzBossDesign.Gap), modifier = Modifier.fillMaxSize()) {
+                items(rows, key = { it.id }) { item ->
+                    val openProject = if (onOpenProject != null && item.projectId != null) {
+                        { onOpenProject(item.projectId) }
+                    } else null
+                    val onDelete = if (canDeleteProjectDocuments && !item.hasIssuedInvoice && !loading && !loadingMore && !deleting) {
+                        { pendingDelete = item }
+                    } else null
+                    EstimateCard(item, openProject, onDelete) { onOpen(item.id) }
+                }
                 if (canLoadMore) item(span = { GridItemSpan(maxLineSpan) }) {
                     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         if (loadingMore) EzBossLoadingIndicator(Modifier.width(100.dp), page = false)
                         else if (error != null) TextButton(onClick = { load(false) }) { Text("Couldn’t load more · Retry") }
-                        else OutlinedButton(onClick = { load(false) }, shape = EzBossDesign.ControlShape) { Text("Load 25 more") }
+                        else OutlinedButton(onClick = { load(false) }, enabled = !deleting, shape = EzBossDesign.ControlShape) { Text("Load 25 more") }
                     }
                 }
             }
         }
+    }
+    pendingDelete?.let { item ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete ${item.number}?") },
+            text = {
+                val date = item.createdDate?.let(::claimLoggedDate) ?: "N/A"
+                Text("Client: ${item.customer.ifBlank { "N/A" }}\nDate created: $date\nPrice: ${money(item.total)}\n\nThis document will remain in Recently Deleted for 30 days before being permanently deleted.")
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDelete = null
+                    deleting = true
+                    deleteSuccess = null
+                    deleteError = null
+                    scope.launch {
+                        try {
+                            model.deleteEstimate(item.id)
+                            deletedIds.add(item.id)
+                            rows = rows.filterNot { it.id == item.id }
+                            deleteSuccess = "${label(item.estimateState)} ${item.number} deleted successfully!"
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            deleteError = e.message ?: "Could not delete this estimate. Please try again."
+                        } finally {
+                            deleting = false
+                        }
+                    }
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+        )
     }
     if (filtersOpen) AlertDialog(onDismissRequest = { filtersOpen = false }, title = { Text("Filter estimates") }, text = {
         Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -140,24 +219,59 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
 
 @Composable private fun FilterChoice(text: String, selected: Boolean, onClick: () -> Unit) { Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) { RadioButton(selected, onClick); Text(text) } }
 
-@Composable private fun EstimateCard(item: EstimateListItem, onClick: () -> Unit) {
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), shape = EzBossDesign.CardShape,
+@Composable private fun EstimateCard(item: EstimateListItem, onOpenProject: (() -> Unit)?, onDelete: (() -> Unit)?, onClick: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth(), shape = EzBossDesign.CardShape,
         colors = CardDefaults.cardColors(containerColor = Color.White),
         border = BorderStroke(1.dp, EzBossDesign.Border), elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
-        Column(Modifier.padding(EzBossDesign.PagePadding), verticalArrangement = Arrangement.spacedBy(EzBossDesign.Gap)) {
-            StatusBadge(label(item.estimateState), item.estimateState)
-            Text(item.number, color = EzBossDesign.Link, style = MaterialTheme.typography.titleMedium)
-            Text(item.customer.ifBlank { "Customer" }, color = EzBossDesign.Muted, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            HorizontalDivider()
-            StatusBadge(item.clientState?.let(::label) ?: "No client status", item.clientState)
-            Text(money(item.total), color = EzBossDesign.Ink, style = MaterialTheme.typography.titleLarge)
+        Row(Modifier.height(IntrinsicSize.Min)) {
+            if (onOpenProject != null) {
+                EstimateProjectShortcut(item.projectLabel, onOpenProject)
+            }
+            Column(
+                Modifier.weight(1f).clickable(role = Role.Button, onClick = onClick).padding(EzBossDesign.PagePadding),
+                verticalArrangement = Arrangement.spacedBy(EzBossDesign.Gap),
+            ) {
+                StatusBadge(label(item.estimateState), item.estimateState)
+                Text(item.number, color = EzBossDesign.Link, style = MaterialTheme.typography.titleMedium)
+                Text(item.customer.ifBlank { "Customer" }, color = EzBossDesign.Muted, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                HorizontalDivider()
+                StatusBadge(item.clientState?.let(::label) ?: "No client status", item.clientState)
+                Text(money(item.total), color = EzBossDesign.Ink, style = MaterialTheme.typography.titleLarge)
+            }
+            if (onDelete != null) {
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Default.Delete, "Delete estimate", tint = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable private fun EstimateProjectShortcut(projectLabel: String?, onOpenProject: () -> Unit) {
+    val tooltip = projectLabel?.let { "Project $it" } ?: "Project"
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(tooltip) } },
+        state = rememberTooltipState(),
+        focusable = false,
+    ) {
+        Box(
+            Modifier.width(48.dp).fillMaxHeight().background(EzBossDesign.Orange)
+                .clickable(role = Role.Button, onClick = onOpenProject),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Default.FolderOpen, projectLabel?.let { "Open project $it" } ?: "Open linked project",
+                tint = Color.White, modifier = Modifier.size(18.dp),
+            )
         }
     }
 }
 
 @Composable private fun StateMessage(title: String, message: String, action: String?, onAction: () -> Unit) { Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 18.sp); Spacer(Modifier.height(8.dp)); Text(message, color = EzBossDesign.Muted); if (action != null) { Spacer(Modifier.height(12.dp)); Button(onClick = onAction) { Text(action) } } } }
 
-@Composable fun EstimateDetailScreen(model: AuthViewModel, id: String, canWriteEstimates: Boolean, initialClaims: Boolean, onOpenClaimJob: (Int) -> Unit, onReturn: () -> Unit) {
+@Composable fun EstimateDetailScreen(model: AuthViewModel, id: String, canWriteEstimates: Boolean, initialClaims: Boolean, backLabel: String, onOpenClaimJob: (Int) -> Unit, onOpenProject: ((String) -> Unit)?, onReturn: () -> Unit) {
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
     var approvalOpen by remember { mutableStateOf(false) }
@@ -216,12 +330,23 @@ private fun label(value: String) = value.split('-', '_').joinToString(" ") { it.
         }
     }
     Column(Modifier.fillMaxSize().background(EzBossDesign.Canvas)) {
-        Row(Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = onReturn) { Icon(Icons.Default.ArrowBack, "Return to estimates") }; Text("Back to estimates", Modifier.clickable(onClick = onReturn).padding(8.dp), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold) }
+        Row(Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = onReturn) { Icon(Icons.Default.ArrowBack, backLabel) }; Text(backLabel, Modifier.clickable(onClick = onReturn).padding(8.dp), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold) }
         HorizontalDivider()
         if (loading) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EzBossLoadingIndicator() }
         else if (estimate == null) StateMessage(if (denied) "Access denied" else "Estimate unavailable", error ?: "This estimate may have been deleted.", if (denied) null else "Retry") { retry++ }
         else {
             val value = estimate!!
+            val projectId = value.projectId
+            if (projectId != null && onOpenProject != null) {
+                Button(
+                    onClick = { onOpenProject(projectId) },
+                    modifier = Modifier.padding(horizontal = EzBossDesign.PagePadding),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = EzBossDesign.Orange, contentColor = Color.White),
+                ) {
+                    Text("View project")
+                }
+            }
             val tabs = estimateDashboardTabs(value.estimateState == "change-order")
             ScrollableTabRow(selectedTabIndex = tabs.indexOfFirst { it.label == tab }.coerceAtLeast(0), edgePadding = 0.dp, containerColor = Color.White) {
                 tabs.forEach { contract ->

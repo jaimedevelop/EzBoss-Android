@@ -2,6 +2,8 @@ package pro.ezboss.mobile
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -9,6 +11,7 @@ import androidx.compose.material3.*
 import pro.ezboss.mobile.ui.theme.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import pro.ezboss.mobile.data.ApiException
@@ -23,9 +26,16 @@ import java.util.UUID
 private val financeKeys=listOf("date","estimate","poNumber","invoice","invoiceValue","payment","paymentMethod","paymentDate","serviceAddress","jobCompletionDate","completedFor","agent")
 private val projectKeys=listOf("name","projectType","startDate","estimatedEndDate","actualEndDate","description","notes")
 private val addressKeys=listOf("address","address2","city","state","zipCode")
+private val projectFormSections = listOf(
+    "General" to listOf("name", "projectType", "description"),
+    "Service address" to addressKeys,
+    "Schedule" to listOf("startDate", "estimatedEndDate", "actualEndDate"),
+    "Progress and notes" to listOf("completionPercentage", "notes", "tags"),
+)
 private val projectStatuses = listOf("planning", "active", "on-hold", "completed", "invoiced", "cancelled")
 
 @Composable fun BusinessRecordsScreen(model: AuthViewModel, destination: String, canWriteProjects: Boolean, canDeleteProjects: Boolean,
+    initialProjectId: String? = null, onBackFromProject: (() -> Unit)? = null,
     onLinkedRecords: (projectId: String, section: String, archived: Boolean) -> Unit) {
     val project=destination=="projects"
     val path=if(project) "projects" else "finance-records"
@@ -39,7 +49,7 @@ private val projectStatuses = listOf("planning", "active", "on-hold", "completed
     var appliedFilter by rememberSaveable { mutableStateOf("all") }
     var page by rememberSaveable { mutableIntStateOf(1) }
     var hasMore by remember { mutableStateOf(false) }
-    var detailId by rememberSaveable { mutableStateOf<String?>(null) }
+    var detailId by rememberSaveable(initialProjectId) { mutableStateOf(initialProjectId) }
     var detail by remember { mutableStateOf<JSONObject?>(null) }
     val scrollState = rememberScrollState()
     var rows by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
@@ -53,7 +63,7 @@ private val projectStatuses = listOf("planning", "active", "on-hold", "completed
     var message by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
     val scope=rememberCoroutineScope()
-    val fields=if (project) projectKeys + addressKeys + listOf("completionPercentage", "tags") else financeKeys
+    val fields = if (project) projectFormSections.flatMap { it.second } else financeKeys
     LaunchedEffect(reload, page, detailId) {
         busy = true
         error = null
@@ -124,7 +134,15 @@ private val projectStatuses = listOf("planning", "active", "on-hold", "completed
             busy = false
         }
     }
-    fun closeDetail() { detail = null; detailId = null; message = null }
+    fun closeDetail() {
+        if (onBackFromProject != null) {
+            onBackFromProject()
+        } else {
+            detail = null
+            detailId = null
+            message = null
+        }
+    }
     fun changeLifecycle(row: JSONObject, archived: Boolean?) = scope.launch {
         if (busy) return@launch
         busy = true
@@ -169,41 +187,85 @@ private val projectStatuses = listOf("planning", "active", "on-hold", "completed
         }
     }
     Column(Modifier.fillMaxSize().verticalScroll(scrollState).imePadding().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        PageHeading(if(project) "Projects" else "Finances", if(project) "Projects, clients and progress" else "Records and linked payment summaries")
+        val editingProject = selected?.takeIf { project }
+        if (editingProject != null) {
+            Text(
+                if (editingProject.has("id")) "Edit Project" else "Create New Project",
+                style = MaterialTheme.typography.titleLarge,
+            )
+            HorizontalDivider()
+        } else {
+            PageHeading(if (project) "Projects" else "Finances", if (project) "Projects, clients and progress" else "Records and linked payment summaries")
+        }
         if(busy)EzBossLoadingIndicator()
         error?.let{Text(it,color=MaterialTheme.colorScheme.error)};message?.let{Text(it)}
         if (selected == null && detailId != null) {
-            TextButton(onClick = { closeDetail() }, enabled = !busy) { Text("Back to projects") }
+            TextButton(onClick = { closeDetail() }, enabled = !busy) { Text(if (onBackFromProject == null) "Back to projects" else "Back to estimates") }
             detail?.let { row ->
-                Text("Overview", style = MaterialTheme.typography.titleLarge)
-                Text(row.optString("name"), style = MaterialTheme.typography.titleMedium)
-                Text("${row.optString("projectNumber")} · ${row.optString("status")}")
-                Text("Client: ${row.optString("clientName")}")
-                Text("Start: ${row.optString("startDate")}")
-                Text("Estimated end: ${row.optString("estimatedEndDate")}")
-                if (!row.isNull("actualEndDate")) Text("Actual end: ${row.optString("actualEndDate")}")
-                row.optString("projectType").takeIf { it.isNotBlank() && it != "null" }?.let { Text("Project type: $it") }
-                val tags = projectTags(row)
-                if (tags.isNotEmpty()) Text("Tags: " + tags.joinToString(", "))
-                Text("Progress: ${row.optString("completionPercentage")}%")
-                projectMoney(row, "currentBudget")?.let { Text("Budget: $it") }
-                projectMoney(row, "actualCost")?.let { Text("Spent: $it") }
-                row.optJSONObject("serviceAddress")?.let { address ->
-                    Text("Site: " + addressKeys.map { address.optString(it) }.filter { it.isNotBlank() }.joinToString(", "))
-                }
-                listOf("description", "notes").forEach { key ->
-                    row.optString(key).takeIf { it.isNotBlank() && it != "null" }?.let { Text(it) }
-                }
                 val archived = !row.isNull("archivedAt")
-                TextButton(onClick = { onLinkedRecords(row.getString("id"), "documents", archived) }, enabled = !busy) { Text("Documents") }
-                TextButton(onClick = { onLinkedRecords(row.getString("id"), "work-orders", archived) }, enabled = !busy) { Text("Work orders") }
-                TextButton(onClick = { onLinkedRecords(row.getString("id"), "purchasing", archived) }, enabled = !busy) { Text("Purchase orders") }
-                if (archived) Text("Archived")
-                if (canWriteProjects && !archived) Button(onClick = { openProjectEditor(row) }, enabled = !busy) { Text("Edit project") }
-                if (canWriteProjects) TextButton(onClick = { changeLifecycle(row, !archived) }, enabled = !busy) {
-                    Text(if (archived) "Restore project" else "Archive project")
+                Text(row.optString("name"), style = MaterialTheme.typography.headlineSmall, color = EzBossDesign.Ink)
+                Text(listOf(row.optString("projectNumber"), row.optString("clientName"))
+                    .filter { it.isNotBlank() }.joinToString(" · "), color = EzBossDesign.Muted)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (canWriteProjects && !archived) OutlinedButton(onClick = { openProjectEditor(row) }, enabled = !busy) {
+                        Text("Edit")
+                    }
+                    if (canWriteProjects) OutlinedButton(onClick = { changeLifecycle(row, !archived) }, enabled = !busy) {
+                        Text(if (archived) "Restore" else "Archive")
+                    }
+                    if (canDeleteProjects) OutlinedButton(onClick = { confirmDelete = true }, enabled = !busy) {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
                 }
-                if (canDeleteProjects) TextButton(onClick = { confirmDelete = true }, enabled = !busy) { Text("Delete project") }
+                Surface(shape = EzBossDesign.ControlShape, color = EzBossDesign.Surface,
+                    border = BorderStroke(1.dp, EzBossDesign.Border)) {
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Overview", Modifier.padding(horizontal = 16.dp, vertical = 12.dp), color = EzBossDesign.OrangeDark,
+                                style = MaterialTheme.typography.labelLarge)
+                            HorizontalDivider(Modifier.width(88.dp), thickness = 2.dp, color = EzBossDesign.Orange)
+                        }
+                        listOf("Documents" to "documents", "Work orders" to "work-orders",
+                            "Purchase orders" to "purchasing", "Punch-list" to "punch-list", "Inspections" to "inspections"
+                        ).forEach { (title, section) ->
+                            TextButton(onClick = { onLinkedRecords(row.getString("id"), section, archived) }, enabled = !busy) {
+                                Text(title, color = EzBossDesign.Muted)
+                            }
+                        }
+                    }
+                }
+                Surface(Modifier.fillMaxWidth(), shape = EzBossDesign.ControlShape, color = EzBossDesign.Surface,
+                    border = BorderStroke(1.dp, EzBossDesign.Border)) {
+                    Column(Modifier.padding(EzBossDesign.PagePadding), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row.optString("projectType").takeIf { it.isNotBlank() && it != "null" }?.let { Text("Type: $it") }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Status")
+                            val projectStatus = row.optString("status")
+                            StatusBadge(projectStatus.replace('-', ' ').replaceFirstChar { it.titlecase() }, projectStatus)
+                            if (archived) Text("Archived")
+                        }
+                    }
+                }
+                Surface(Modifier.fillMaxWidth(), shape = EzBossDesign.CardShape, color = EzBossDesign.Surface,
+                    border = BorderStroke(1.dp, EzBossDesign.Border)) {
+                    Column(Modifier.padding(EzBossDesign.PagePadding), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Project Details", style = MaterialTheme.typography.titleMedium)
+                        Text("Start: ${row.optString("startDate")}")
+                        Text("Estimated end: ${row.optString("estimatedEndDate")}")
+                        if (!row.isNull("actualEndDate")) Text("Actual end: ${row.optString("actualEndDate")}")
+                        val tags = projectTags(row)
+                        if (tags.isNotEmpty()) Text("Tags: " + tags.joinToString(", "))
+                        Text("Progress: ${row.optString("completionPercentage")}%")
+                        projectMoney(row, "currentBudget")?.let { Text("Budget: $it") }
+                        projectMoney(row, "actualCost")?.let { Text("Spent: $it") }
+                        row.optJSONObject("serviceAddress")?.let { address ->
+                            Text("Site: " + addressKeys.map { address.optString(it) }.filter { it.isNotBlank() }.joinToString(", "))
+                        }
+                        listOf("description", "notes").forEach { key ->
+                            row.optString(key).takeIf { it.isNotBlank() && it != "null" }?.let { Text(it) }
+                        }
+                    }
+                }
                 if (error != null) TextButton(onClick = { reload++ }, enabled = !busy) { Text("Reload project") }
             }
             if (!busy && detail == null) TextButton(onClick = { reload++ }) { Text("Retry") }
@@ -261,17 +323,41 @@ private val projectStatuses = listOf("planning", "active", "on-hold", "completed
             if (rows.isEmpty() && !busy && error == null) Text("No records in this company.")
         } else {
             val row=selected!!
-            if(project) {
-                Text("Client: "+clients.firstOrNull{it.optString("id")==clientId}?.optString("name").orEmpty())
-                clients.forEach{client->TextButton(onClick={selectClient(client, !row.has("id"))},enabled=!busy){Text(client.optString("name"))}}
-                Text("Status: $status")
-                projectStatuses.chunked(2).forEach{group->Row{group.forEach{v->TextButton(onClick={status=v},enabled=!busy){Text(v)}}}}
+            val field: @Composable (String) -> Unit = { key ->
+                OutlinedTextField(
+                    value = values[key].orEmpty(),
+                    onValueChange = { values = values + (key to it) },
+                    label = { Text(if (key == "tags") "Tags (one per line)" else key.replace(Regex("([a-z])([A-Z])"),"$1 $2")) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !busy,
+                )
+            }
+            if (project) {
+                projectFormSections.forEachIndexed { index, (title, keys) ->
+                    if (index > 0) HorizontalDivider()
+                    Text(title, style = MaterialTheme.typography.titleMedium)
+                    keys.forEach { field(it) }
+                    if (index == 0) {
+                        Text("Client: " + clients.firstOrNull { it.optString("id") == clientId }?.optString("name").orEmpty())
+                        clients.forEach { client ->
+                            TextButton(onClick = { selectClient(client, !row.has("id")) }, enabled = !busy) { Text(client.optString("name")) }
+                        }
+                        Text("Status: $status")
+                        projectStatuses.chunked(2).forEach { group ->
+                            Row {
+                                group.forEach { value ->
+                                    TextButton(onClick = { status = value }, enabled = !busy) { Text(value) }
+                                }
+                            }
+                        }
+                    }
+                }
             } else {
                 val summary=row.optJSONObject("paymentSummary")
                 if(summary!=null)Text("Ledger: "+summary.optString("paid")+" / "+summary.optString("total")+" · "+summary.optString("status"))
                 Text("Manual record fields do not alter the invoice payment ledger. Record payments or refunds on the document.")
+                financeKeys.forEach { field(it) }
             }
-            fields.forEach{key->OutlinedTextField(values[key].orEmpty(),{values=values+(key to it)},label={Text(if (key == "tags") "Tags (one per line)" else key.replace(Regex("([a-z])([A-Z])"),"$1 $2"))},modifier=Modifier.fillMaxWidth(),enabled=!busy)}
             Button(enabled=!busy,onClick={scope.launch{
                 busy=true;error=null;message=null
                 try {
@@ -307,8 +393,12 @@ private val projectStatuses = listOf("planning", "active", "on-hold", "completed
                 } catch (e: CancellationException) {
                     throw e
                 } catch(e:Exception){error=e.message ?: "Save was not confirmed. Reload before retrying."} finally{busy=false}
-            }}){Text("Save")}
-            TextButton(onClick={selected=null;reload++},enabled=!busy){Text("Discard / reload")}
+            }}) {
+                Text(if (!project) "Save" else if (row.has("id")) "Save Changes" else "Create Project")
+            }
+            TextButton(onClick = { selected = null; reload++ }, enabled = !busy) {
+                Text(if (project) "Cancel" else "Discard / reload")
+            }
         }
     }
 }

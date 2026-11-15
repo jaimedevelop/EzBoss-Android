@@ -2,6 +2,7 @@ package pro.ezboss.mobile.auth
 
 import android.app.Activity
 import android.content.Context
+import android.os.SystemClock
 import com.auth0.android.callback.Callback
 import com.auth0.android.Auth0
 import com.auth0.android.authentication.AuthenticationAPIClient
@@ -51,6 +52,15 @@ class AuthRepository(context: Context, private val config: AuthConfiguration) {
         return true
     }
     private val credentialGate = CredentialGate()
+    private var recentValidation: Pair<String, Long>? = null
+    // Called within credentialGate. Business requests still validate at the API.
+    private suspend fun validateNativeToken(token: String, reuse: Boolean) {
+        val recent = recentValidation
+        if (reuse && recent?.first == token && SystemClock.elapsedRealtime() < recent.second) return
+        recentValidation = null
+        native!!.validate(token)
+        recentValidation = token to (SystemClock.elapsedRealtime() + 10_000)
+    }
     private val account = if (config.ready && !usesBetterAuth) Auth0.getInstance(config.clientId, config.domain) else null
     private val manager: SecureCredentialsManager? = account?.let {
         SecureCredentialsManager(AuthenticationAPIClient(it), context.applicationContext, SharedPreferencesStorage(context.applicationContext))
@@ -90,7 +100,7 @@ class AuthRepository(context: Context, private val config: AuthConfiguration) {
         requireConfigured()
         if (usesBetterAuth) {
             val token = secure!!.read() ?: return@run null
-            try { native!!.validate(token) } catch(e:NativeAuthException) { if(e.status==401)secure.clear();throw e }
+            try { validateNativeToken(token, reuse = false) } catch(e:NativeAuthException) { if(e.status==401)secure.clear();throw e }
             return@run SessionCredentials(token)
         }
         if (!manager!!.hasValidCredentials()) {
@@ -102,11 +112,11 @@ class AuthRepository(context: Context, private val config: AuthConfiguration) {
         catch (_: Exception) { manager.clearCredentials(); null }
     }
 
-    suspend fun accessToken(): String = credentialGate.run {
+    suspend fun accessToken(reuseRecentValidation: Boolean = false): String = credentialGate.run {
         requireConfigured()
         if (usesBetterAuth) {
             val token = secure!!.read() ?: throw NativeAuthException(401)
-            native!!.validate(token); token
+            validateNativeToken(token, reuseRecentValidation); token
         } else readCredentials().accessToken
     }
 
@@ -120,7 +130,7 @@ class AuthRepository(context: Context, private val config: AuthConfiguration) {
     }
 
     suspend fun clearCredentials() = withContext(NonCancellable) {
-        credentialGate.run { native?.cancelFlow(); secure?.clear(); manager?.clearCredentials(); Unit }
+        credentialGate.run { recentValidation = null; native?.cancelFlow(); secure?.clear(); manager?.clearCredentials(); Unit }
     }
 
     // App sign-out never opens a browser. The next login explicitly authenticates.

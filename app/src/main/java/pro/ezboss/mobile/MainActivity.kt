@@ -140,7 +140,7 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
         if (state !is AuthState.Authenticated && !(accountOnly && state is AuthState.CompanySelection)) throw ApiException(401, "Sign in required.")
         if (busy || authenticationUnavailable) throw ApiException(503, "Account access is being checked. Retry shortly.")
         val epoch = sessionEpoch.current
-        val token = try { auth.accessToken() }
+        val token = try { auth.accessToken(reuseRecentValidation = true) }
         catch (e: CancellationException) { throw e }
         catch (e: NativeAuthException) {
             if(e.status>=500 || e.status==429) {
@@ -176,6 +176,15 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     }
     suspend fun estimatePage(customer: String, estimateState: String?, clientState: String?, offset: Int, projectId: String? = null) = authenticatedRequest {
         api.estimates(it, company(), customer, estimateState, clientState, offset, projectId = projectId)
+    }
+    suspend fun deleteEstimate(id: String) = authenticatedRequest { token ->
+        val membership = company()
+        val path = "estimates/${android.net.Uri.encode(id)}"
+        val current = api.operation(token, membership, path) as org.json.JSONObject
+        if (!current.isNull("invoiceNumber") || !current.isNull("issuedInvoiceId")) {
+            throw ApiException(409, "Issued invoices and their source estimates cannot be deleted.")
+        }
+        api.operation(token, membership, path, method = "DELETE")
     }
     suspend fun dashboardData(path: String) = authenticatedRequest { api.dashboardData(it, path, company()) }
     suspend fun documentAction(id: String, action: String, body: org.json.JSONObject = org.json.JSONObject()) = authenticatedRequest { api.documentAction(it, company(), id, action, body) }
@@ -376,11 +385,12 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     var canWriteProjects by remember(model.membership) { mutableStateOf(false) }
     var canDeleteProjects by remember(model.membership) { mutableStateOf(false) }
     var canReadClaims by remember(model.membership) { mutableStateOf(false) }
+    var canDeleteProjectDocuments by remember(model.membership) { mutableStateOf(false) }
     var canWriteProjectDocuments by remember(model.membership) { mutableStateOf(false) }
     var accessError by remember(model.membership) { mutableStateOf(false) }
     var accessRetry by remember { mutableIntStateOf(0) }
     LaunchedEffect(model.membership, accessRetry) {
-        allowedPages = null; accessError = false; canWriteProjects = false; canDeleteProjects = false; canWriteProjectDocuments = false; canReadClaims = false
+        allowedPages = null; accessError = false; canWriteProjects = false; canDeleteProjects = false; canWriteProjectDocuments = false; canDeleteProjectDocuments = false; canReadClaims = false
         try {
             val result = model.operation("account/me?membershipId=${model.membership}") as org.json.JSONObject
             val effective = result.getJSONObject("effectivePermissions")
@@ -389,6 +399,8 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
             canWriteProjects = capabilities.optJSONObject("write:projects")?.optBoolean("allowed") == true
             canDeleteProjects = capabilities.optJSONObject("delete:projects")?.optBoolean("allowed") == true
             canReadClaims = capabilities.optJSONObject("read:estimates")?.optBoolean("allowed") == true
+            canDeleteProjectDocuments = canReadClaims &&
+                capabilities.optJSONObject("delete:estimates")?.optBoolean("allowed") == true
             canWriteProjectDocuments = canReadClaims &&
                 capabilities.optJSONObject("write:estimates")?.optBoolean("allowed") == true
             allowedPages = pages.keys().asSequence().filter { pages.getJSONObject(it).optBoolean("allowed") }.toSet().filter { key ->
@@ -431,7 +443,7 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                     }
                 }
                 Box(Modifier.weight(1f)) {
-                    AuthenticatedDestinationHost(navController, model, account, ::canOpen, allowedPages != null, accessError, canWriteProjects, canDeleteProjects, canWriteProjectDocuments) { accessRetry++ }
+                    AuthenticatedDestinationHost(navController, model, account, ::canOpen, allowedPages != null, accessError, canWriteProjects, canDeleteProjects, canWriteProjectDocuments, canDeleteProjectDocuments) { accessRetry++ }
 
                 }
             }
@@ -483,7 +495,10 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
     }
 }
 
-@Composable private fun AuthenticatedDestinationHost(navController: NavHostController, model: AuthViewModel, account: Account, canOpen: (String) -> Boolean, accessLoaded: Boolean, accessError: Boolean, canWriteProjects: Boolean, canDeleteProjects: Boolean, canWriteProjectDocuments: Boolean, retryAccess: () -> Unit) {
+@Composable private fun AuthenticatedDestinationHost(navController: NavHostController, model: AuthViewModel, account: Account, canOpen: (String) -> Boolean, accessLoaded: Boolean, accessError: Boolean, canWriteProjects: Boolean, canDeleteProjects: Boolean, canWriteProjectDocuments: Boolean, canDeleteProjectDocuments: Boolean, retryAccess: () -> Unit) {
+    val openProject: ((String) -> Unit)? = if (canOpen("projects")) {
+        { id -> navController.navigate("projects/${android.net.Uri.encode(id)}/overview") }
+    } else null
     NavHost(navController = navController, startDestination = appDestinations.first().route, modifier = Modifier.fillMaxSize()) {
         appDestinations.forEach { destination ->
             val route = when (destination.route) {
@@ -504,13 +519,19 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                     }
                 }
                 else if (destination.route == "dashboard") DashboardScreen(account, model, { navController.navigate("estimates/$it") }, { navController.navigate(it) { launchSingleTop = true } }, canOpen)
-                else if (destination.route == "estimates") EstimatesListScreen(model, when(entry.arguments?.getString("type")) { "estimate" -> "Estimate"; "invoice" -> "Invoice"; else -> "All" }) { id -> navController.navigate("estimates/$id") }
+                else if (destination.route == "estimates") {
+                    EstimatesListScreen(
+                        model,
+                        when (entry.arguments?.getString("type")) { "estimate" -> "Estimate"; "invoice" -> "Invoice"; else -> "All" },
+                        onOpenProject = openProject,
+                    ) { id -> navController.navigate("estimates/$id") }
+                }
                 else if (destination.route == "claims") ClaimsWorkspace(model, canWriteProjectDocuments, entry.arguments?.getInt("job") ?: 0) {
                     navController.navigate("estimates/$it?claims=true")
                 }
                 else if (destination.route in listOf("inventory", "collections", "work-orders", "purchasing")) OperationsScreen(model, destination.route, canOpen)
                 else if (destination.route in listOf("projects","finance")) BusinessRecordsScreen(model, destination.route, canWriteProjects, canDeleteProjects) { projectId, section, archived ->
-                    val query = if (section == "documents" && archived) "?archived=true" else ""
+                    val query = if (archived && section in listOf("documents", "inspections", "punch-list")) "?archived=true" else ""
                     navController.navigate("projects/${android.net.Uri.encode(projectId)}/$section$query")
                 }
                 else if (destination.route == "people") PeopleSettingsScreen(model, false)
@@ -518,12 +539,61 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
                 else PlaceholderDestination(destination.title)
             }
         }
+        composable("projects/{projectId}/overview") { entry ->
+            val id = entry.arguments?.getString("projectId").orEmpty()
+            if (id.isNotEmpty() && canOpen("projects")) {
+                BusinessRecordsScreen(
+                    model, "projects", canWriteProjects, canDeleteProjects,
+                    initialProjectId = id, onBackFromProject = { navController.popBackStack() },
+                ) { projectId, section, archived ->
+                    val query = if (archived && section in listOf("documents", "inspections", "punch-list")) "?archived=true" else ""
+                    navController.navigate("projects/${android.net.Uri.encode(projectId)}/$section$query")
+                }
+            }
+        }
         composable("projects/{projectId}/documents?archived={archived}",
             arguments = listOf(navArgument("archived") { type = NavType.BoolType; defaultValue = false })) { entry ->
             val id = entry.arguments?.getString("projectId").orEmpty()
             val canCreate = canWriteProjectDocuments && entry.arguments?.getBoolean("archived") != true
-            if (id.isNotEmpty() && canOpen("projects")) EstimatesListScreen(model, projectId = id, canCreateProjectDraft = canCreate) { documentId ->
+            if (id.isNotEmpty() && canOpen("projects")) EstimatesListScreen(model, projectId = id, canCreateProjectDraft = canCreate, canDeleteProjectDocuments = canDeleteProjectDocuments) { documentId ->
                 navController.navigate("estimates/$documentId")
+            }
+        }
+        composable("projects/{projectId}/inspections?archived={archived}",
+            arguments = listOf(navArgument("archived") { type = NavType.BoolType; defaultValue = false })) { entry ->
+            val id = entry.arguments?.getString("projectId").orEmpty()
+            val canAdd = canWriteProjects && entry.arguments?.getBoolean("archived") != true
+            if (id.isNotEmpty() && canOpen("projects")) ProjectInspectionsScreen(model, id, canAdd, onOpenWorkOrder = { orderId ->
+                navController.navigate("work-orders/${android.net.Uri.encode(orderId)}")
+            }) { inspectionId ->
+                val archived = entry.arguments?.getBoolean("archived") == true
+                navController.navigate("projects/${android.net.Uri.encode(id)}/inspections/$inspectionId/notes?archived=$archived")
+            }
+        }
+        listOf("punch-list", "inspections/{inspectionId}/notes").forEach { section ->
+            composable("projects/{projectId}/$section?archived={archived}",
+                arguments = listOf(navArgument("archived") { type = NavType.BoolType; defaultValue = false })) { entry ->
+                val id = entry.arguments?.getString("projectId").orEmpty()
+                val inspectionId = entry.arguments?.getString("inspectionId")
+                val canAdd = canWriteProjects && entry.arguments?.getBoolean("archived") != true
+                if (id.isNotEmpty() && canOpen("projects")) {
+                    val path = "projects/${android.net.Uri.encode(id)}"
+                    val notesPath = if (inspectionId == null) "$path/punch-list/notes"
+                        else "$path/inspections/${android.net.Uri.encode(inspectionId)}/notes"
+                    if (inspectionId == null) {
+                        ProjectUpdateNotesScreen(model, notesPath, "Punch-list", canAdd, punchList = true, projectId = id) { orderId ->
+                            navController.navigate("work-orders/${android.net.Uri.encode(orderId)}")
+                        }
+                    } else {
+                        ProjectUpdateNotesScreen(model, notesPath, "Update Notes", canAdd)
+                    }
+                }
+            }
+        }
+        composable("work-orders/{workOrderId}") { entry ->
+            val id = entry.arguments?.getString("workOrderId").orEmpty()
+            if (id.isNotEmpty() && canOpen("projects")) {
+                ProjectWorkOrderDetailScreen(model, id) { navController.popBackStack() }
             }
         }
         listOf("work-orders", "purchasing").forEach { section ->
@@ -537,8 +607,12 @@ class AuthViewModel(private val auth: AuthRepository, private val api: ApiClient
             defaultValue = false
         })) { entry ->
             val id = entry.arguments?.getString("estimateId").orEmpty()
+            val fromProjectDocuments = navController.previousBackStackEntry?.destination?.route ==
+                "projects/{projectId}/documents?archived={archived}"
             EstimateDetailScreen(model, id, canWriteProjectDocuments, entry.arguments?.getBoolean("claims") == true,
-                onOpenClaimJob = { navController.navigate("claims?job=$it") }) { navController.popBackStack() }
+                backLabel = if (fromProjectDocuments) "Back to project documents" else "Back to estimates",
+                onOpenClaimJob = { navController.navigate("claims?job=$it") },
+                onOpenProject = openProject) { navController.popBackStack() }
         }
     }
 }

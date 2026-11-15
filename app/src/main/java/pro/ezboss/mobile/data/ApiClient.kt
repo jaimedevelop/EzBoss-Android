@@ -216,6 +216,7 @@ class ApiClient(baseUrl: String, transport: OkHttpClient = OkHttpClient(), priva
             id = row.opt("id").toString(), number = row.optString("estimateNumber"), invoiceNumber = row.optString("invoiceNumber").takeIf { it.isNotBlank() },
             customer = row.optString("customerName"), email = row.optString("customerEmail"), phone = row.optString("customerPhone"),
             address = listOf(row.optString("serviceAddress"), row.optString("serviceAddress2"), listOf(row.optString("serviceCity"), row.optString("serviceState"), row.optString("serviceZipCode")).filter(String::isNotBlank).joinToString(", ")).filter(String::isNotBlank).joinToString("\n"),
+            projectId = row.optString("projectId").takeIf { !row.isNull("projectId") && it.isNotBlank() },
             projectDescription = row.optString("projectDescription"), estimateState = row.optString("estimateState"), clientState = row.optString("clientState").takeIf { it.isNotBlank() && it != "null" },
             subtotal = row.optDouble("subtotal", 0.0), discount = row.optDouble("discount", 0.0), discountType = row.optString("discountType", "fixed"), tax = row.optDouble("tax", 0.0), taxRate = row.optDouble("taxRate", 0.0), total = row.optDouble("total", 0.0), validUntil = row.optString("validUntil"),
             contractor = row.optString("contractorCompany"), contractorAddress = row.optString("contractorCompanyAddress"), contractorPhone = row.optString("contractorCompanyPhone"), contractorEmail = row.optString("contractorCompanyEmail"), contractorWebsite = row.optString("contractorCompanyWebsite"),
@@ -245,15 +246,23 @@ class ApiClient(baseUrl: String, transport: OkHttpClient = OkHttpClient(), priva
 }
 
 data class EstimatePage(val items: List<EstimateListItem>, val canLoadMore: Boolean)
-data class EstimateListItem(val id: String, val number: String, val customer: String, val estimateState: String, val clientState: String?, val total: Double)
+data class EstimateListItem(val id: String, val number: String, val customer: String, val estimateState: String, val clientState: String?, val total: Double, val projectId: String? = null, val projectLabel: String? = null, val createdDate: String? = null, val hasIssuedInvoice: Boolean = false)
 data class EstimateLine(val id: String, val description: String, val quantity: Double, val unitPrice: Double, val total: Double, val type: String, val groupId: String, val sortOrder: Int)
 data class EstimateGroup(val id: String, val name: String, val description: String, val showPrice: Boolean)
-data class EstimateDetail(val id: String, val number: String, val invoiceNumber: String?, val customer: String, val email: String, val phone: String, val address: String, val projectDescription: String, val estimateState: String, val clientState: String?, val subtotal: Double, val discount: Double, val discountType: String, val tax: Double, val taxRate: Double, val total: Double, val validUntil: String, val contractor: String, val contractorAddress: String, val contractorPhone: String, val contractorEmail: String, val contractorWebsite: String, val lines: List<EstimateLine>, val groups: List<EstimateGroup>, val displayMode: String, val hidden: Set<String>, val showEstimate: Boolean, val showItemPrices: Boolean, val showGroupPrices: Boolean, val showSubtotal: Boolean, val showTax: Boolean, val showTotal: Boolean, val currentRevision: Int = 0, val collectionHold: Boolean = false, val history: List<EstimateHistory> = emptyList(), val documentDate: String? = null, val customerViews: List<EstimateCustomerView> = emptyList())
+data class EstimateDetail(val id: String, val number: String, val invoiceNumber: String?, val customer: String, val email: String, val phone: String, val address: String, val projectDescription: String, val estimateState: String, val clientState: String?, val subtotal: Double, val discount: Double, val discountType: String, val tax: Double, val taxRate: Double, val total: Double, val validUntil: String, val contractor: String, val contractorAddress: String, val contractorPhone: String, val contractorEmail: String, val contractorWebsite: String, val lines: List<EstimateLine>, val groups: List<EstimateGroup>, val displayMode: String, val hidden: Set<String>, val showEstimate: Boolean, val showItemPrices: Boolean, val showGroupPrices: Boolean, val showSubtotal: Boolean, val showTax: Boolean, val showTotal: Boolean, val currentRevision: Int = 0, val collectionHold: Boolean = false, val history: List<EstimateHistory> = emptyList(), val documentDate: String? = null, val customerViews: List<EstimateCustomerView> = emptyList(), val projectId: String? = null)
 
 internal fun mapEstimateListItem(row: JSONObject) = EstimateListItem(
     id = row.opt("id").toString(), number = if (row.optString("estimateState") == "invoice") row.optString("invoiceNumber").ifBlank { "Number pending" } else row.optString("estimateNumber").ifBlank { "Number pending" },
     customer = row.optString("customerName", "Customer"), estimateState = row.optString("estimateState", "estimate"),
     clientState = row.optString("clientState").takeIf { it.isNotBlank() && it != "null" }, total = row.optDouble("total", 0.0),
+    projectId = row.optString("projectId", "").takeIf { !row.isNull("projectId") && it.isNotBlank() },
+    createdDate = listOf("createdDate", "createdAt").firstOrNull { !row.isNull(it) }?.let(row::optString),
+    hasIssuedInvoice = !row.isNull("invoiceNumber") || !row.isNull("issuedInvoiceId"),
+    projectLabel = row.optJSONObject("linkedProject")?.let { project ->
+        listOf("name", "number").filterNot(project::isNull)
+            .map { project.optString(it).trim() }.filter(String::isNotEmpty)
+            .joinToString(" / ").takeIf(String::isNotEmpty)
+    },
 )
 
 

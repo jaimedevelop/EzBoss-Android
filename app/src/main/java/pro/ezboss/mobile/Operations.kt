@@ -182,6 +182,16 @@ fun OperationsScreen(model: AuthViewModel, destination: String, canOpen: (String
     }
 }
 
+@Composable
+fun ProjectWorkOrderDetailScreen(model: AuthViewModel, id: String, onBack: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        OperationDetail(model, "work-orders", id, "work-orders", onBack)
+    }
+}
+
 @Composable private fun OperationDetail(model:AuthViewModel,path:String,id:String,kind:String,back:()->Unit) {
     var row by remember(id) { mutableStateOf<JSONObject?>(null) }
     var error by remember(id) { mutableStateOf<String?>(null) }
